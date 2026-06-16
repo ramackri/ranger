@@ -112,6 +112,7 @@ On first startup with an empty registry, the **first ingestor pod** publishes an
 }
 ```
 
+- **`services`** — per-repo allowlist for `POST /api/audit/access` (`allowedUsers` short names).
 - **`version`** — increments on every successful REST mutation; clients send `expectedVersion` for optimistic locking.
 - **`topicPartitionCount`** — must match Kafka partition count for `ranger_audits`.
 - **`buffer`** — sticky hash target for plugins not yet promoted.
@@ -127,6 +128,7 @@ Base: `https://<ingestor-host>:<port>/api/audit`
 | `GET` | `/partition-plan` | Read in-memory plan on this pod |
 | `PUT` | `/partition-plan` | Replace full plan (advanced) |
 | `POST` | `/partition-plan/promote` | Promote plugin from buffer to dedicated partitions |
+| `POST` | `/partition-plan/onboard-repo` | Upsert `services[repo]` + promote plugin (single version) |
 | `POST` | `/partition-plan/scale` | Add tail partitions to an existing plugin |
 
 Example promote:

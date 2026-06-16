@@ -23,13 +23,13 @@ under the License.
 
 **Audience:** Architects, operators, and reviewers planning runtime plugin onboarding without ingestor restart.
 
-**Operator guide (everyone):** [README-DYNAMIC-SERVICE-ALLOWLIST-GUIDE.md](README-DYNAMIC-SERVICE-ALLOWLIST-GUIDE.md) — plain-language companion to this design doc (mirrors [partition plan guide](README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md)).
+**Operator guide (everyone):** [README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md](README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md) — unified ingestor registry guide (partition routing + service allowlist; [Confluence](https://cloudera.atlassian.net/wiki/spaces/ENG/pages/12043681813)).
 
 **Related docs:**
 
 | Doc | Relationship |
 |-----|----------------|
-| [README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md](README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md) | Dynamic **Kafka routing** (partition plan) — orthogonal; companion operator guide |
+| [README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md](README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md) | Unified operator guide (routing + allowlist in one registry) |
 | [DESIGN-KAFKA-DYNAMIC-PARTITIONING.md](DESIGN-KAFKA-DYNAMIC-PARTITIONING.md) | Partition plan architecture |
 | [README-KAFKA-PARTITION-PLAN-REGISTRY-REST.md](README-KAFKA-PARTITION-PLAN-REGISTRY-REST.md) | Partition-plan Kafka topic + REST |
 | [README-KAFKA-PARTITION-PLAN-IMPLEMENTATION.md](README-KAFKA-PARTITION-PLAN-IMPLEMENTATION.md) | Phase 6: **partition-plan admin** allowlist (separate surface) |
@@ -214,32 +214,36 @@ Kerberos (or JWT/basic) success does **not** imply authorization. Surface 1 (`al
 
 ---
 
-## 5. Proposed architecture
+## 5. Proposed architecture (unified registry)
 
-### 5.1 High-level (mirror partition plan)
+### 5.1 Single durable document
 
-| Component | Partition plan (exists / planned) | Service allowlist (proposed) |
-|-----------|-----------------------------------|------------------------------|
-| **Durable store** | Kafka compacted `ranger_audit_partition_plan` | Kafka compacted `ranger_audit_service_allowlist` (name TBD) |
-| **In-memory cache** | `PartitionPlanService` + watcher | `ServiceAllowlistService` + watcher |
-| **Bootstrap** | Seed v1 from site XML if topic empty | Seed from site XML `service.*.allowed.users` if topic empty |
-| **Admin REST** | `GET/PUT /api/audit/partition-plan` | `GET/PUT /api/audit/service-allowlist` |
-| **Request path** | `AuditPartitioner` reads cache | `AuditREST.isAllowedServiceUser()` reads cache |
-| **AuthZ on REST** | `partition.plan.allowed.users` (Phase 6) | `service.allowlist.admin.users` (proposed) |
+Service allowlist and partition routing share **one** Kafka compacted topic and **one** in-memory cache:
+
+| Component | Unified registry |
+|-----------|------------------|
+| **Durable store** | Kafka compacted `ranger_audit_partition_plan` (`plugins`, `buffer`, `services`) |
+| **In-memory cache** | `PartitionPlanHolder` + `PartitionPlanWatcher` |
+| **Bootstrap** | Seed v1 from site XML (`configured.plugins` + `service.*.allowed.users`) when topic empty |
+| **Admin REST** | `GET/PUT/POST /api/audit/partition-plan` (+ `onboard-repo`) |
+| **Plugin authz path** | `AuditREST.isAllowedServiceUser()` reads `plan.services` when dynamic enabled |
+| **Routing path** | `AuditPartitioner` reads `plan.plugins` / `buffer` |
+| **AuthZ on REST** | `kafka.partition.plan.allowed.users` (when configured) |
+
+No separate `ranger_audit_service_allowlist` topic or `/service-allowlist` REST surface.
 
 ### 5.2 Control plane vs data plane
 
 ```mermaid
 flowchart LR
   subgraph control [Control plane — rare updates]
-    AdminREST[Admin REST]
-    AllowTopic[(ranger_audit_service_allowlist compacted)]
-    PlanTopic[(ranger_audit_partition_plan compacted)]
-    Watcher[ServiceAllowlistWatcher]
-    Mem[(In-memory allowlist map)]
+    AdminREST["/api/audit/partition-plan"]
+    PlanTopic[(ranger_audit_partition_plan)]
+    Watcher[PartitionPlanWatcher]
+    Mem[(PartitionPlanHolder)]
 
-    AdminREST --> AllowTopic
-    Watcher --> AllowTopic
+    AdminREST --> PlanTopic
+    Watcher --> PlanTopic
     Watcher --> Mem
   end
 
@@ -249,46 +253,42 @@ flowchart LR
     Kafka[(ranger_audits)]
 
     Plugin --> REST
-    REST -->|isAllowedServiceUser| Mem
+    REST -->|isAllowedServiceUser from services| Mem
     REST -->|on success| Kafka
   end
 ```
 
-**Takeaway:** Allowlist topic = small, rare config (like partition plan). Audit events still flow through `ranger_audits`; dispatchers unchanged.
+**Takeaway:** One compacted config topic; audit events still flow through `ranger_audits`; dispatchers unchanged.
 
-### 5.3 Registry document shape (proposed JSON)
+### 5.3 Registry document shape (unified JSON)
 
-Key: audit topic name or fixed key `default` (single global allowlist document).
+Kafka key: audit topic name (e.g. `ranger_audits`).
 
 ```json
 {
-  "version": 3,
+  "topic": "ranger_audits",
+  "version": 8,
+  "topicPartitionCount": 48,
   "updatedAt": "2026-06-15T12:00:00Z",
   "updatedBy": "admin",
+  "plugins": {
+    "hive": { "partitions": [6, 7, 8] }
+  },
+  "buffer": { "partitions": [40, 41, 42] },
   "services": {
-    "dev_hive": {
-      "allowedUsers": ["hive"],
-      "source": "policy-manager",
-      "notes": "synced from dev_hive policy.download.auth.users"
-    },
-    "dev_trino": {
-      "allowedUsers": ["trino"],
-      "source": "rest",
-      "notes": "onboarded via PUT /service-allowlist"
-    },
-    "dev_ozone": {
-      "allowedUsers": ["om", "ozone"],
-      "source": "rest"
-    }
+    "dev_hive": { "allowedUsers": ["hive"] },
+    "dev_trino": { "allowedUsers": ["trino"], "source": "rest" },
+    "dev_ozone": { "allowedUsers": ["om", "ozone"] }
   }
 }
 ```
 
 **Rules:**
 
-- `version` monotonic; `PUT` uses optimistic concurrency (`expectedVersion`) like partition plan.
-- `allowedUsers` = short names **after** `auth_to_local` (same semantics as today’s XML values).
-- Empty or missing repo entry → **403** for that `serviceName` (fail closed).
+- Single `version` for routing **and** allowlist mutations (`expectedVersion` on all writes).
+- `allowedUsers` = short names **after** `auth_to_local`.
+- Missing repo in `services` when registry is active → **403** for that `serviceName` (fail closed).
+- Brownfield plans without `services`: lazy in-memory merge from XML until first admin PUT.
 
 ---
 
@@ -317,62 +317,41 @@ AuditREST.isAllowedServiceUser(serviceName, authenticatedUser)
 - Remove `static final allowedServiceUsers`; inject `ServiceAllowlistService` (same pattern as `PartitionPlanService`).
 - Watcher polls or consumes compacted topic; on change, swap in-memory map atomically.
 - **Read path:** O(1) map lookup; no Kafka read per audit POST.
-- **Fallback:** If dynamic mode disabled (`service.allowlist.dynamic.enabled=false`), keep current static XML behavior.
+- **Fallback:** If dynamic mode disabled (`kafka.partition.plan.dynamic.enabled=false`), keep current static XML behavior.
 
 ---
 
-## 7. Admin REST API (proposed)
+## 7. Admin REST API (unified `/partition-plan`)
 
 ### Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/audit/service-allowlist` | Admin allowlist | Return current document + version |
-| `PUT` | `/api/audit/service-allowlist` | Admin allowlist | Replace or merge; write to Kafka topic |
-| `PUT` | `/api/audit/service-allowlist/services/{repo}` | Admin allowlist | Upsert one repo (convenience) |
-| `DELETE` | `/api/audit/service-allowlist/services/{repo}` | Admin allowlist | Remove repo (optional; fail-closed for plugins) |
+| `GET` | `/api/audit/partition-plan` | `partition.plan.allowed.users` | Return full plan (`plugins`, `buffer`, `services`, `version`) |
+| `PUT` | `/api/audit/partition-plan` | Admin | Replace plan; optional `services` map in body |
+| `POST` | `/api/audit/partition-plan/promote` | Admin | Promote plugin; optional `repo` + `allowedUsers` |
+| `POST` | `/api/audit/partition-plan/onboard-repo` | Admin | Upsert `services[repo]` + promote plugin (one version) |
+| `POST` | `/api/audit/partition-plan/scale` | Admin | Append tail partitions (routing only) |
 
-**PUT body (full replace example):**
-
-```json
-{
-  "expectedVersion": 2,
-  "services": {
-    "dev_trino": {
-      "allowedUsers": ["trino"]
-    }
-  }
-}
-```
-
-**Responses:** Same patterns as partition plan — `200` OK, `409` version conflict, `401` unauthenticated, `403` not admin.
-
-### Unified **onboard plugin** API (optional Phase 2)
-
-Single operation for ops when adding `dev_trino`:
+**Onboard repo example:**
 
 ```http
-POST /api/audit/onboard-plugin
+POST /api/audit/partition-plan/onboard-repo
 ```
 
 ```json
 {
   "repo": "dev_trino",
-  "appIds": ["trino"],
+  "pluginId": "trino",
   "allowedUsers": ["trino"],
   "partitionCount": 3,
-  "expectedPlanVersion": 5,
-  "expectedAllowlistVersion": 2
+  "expectedVersion": 5
 }
 ```
 
-**Atomic intent (best-effort across two topics):**
+**Atomic intent:** Single Kafka write bumps one `version` covering both `services` and `plugins` — no cross-topic ordering problem.
 
-1. Upsert `dev_trino` in service allowlist registry.
-2. Append/allocate partition range for `trino` in partition plan.
-3. Optionally grow `ranger_audits` partition count.
-
-If step 2 succeeds and step 1 fails, return `207 Multi-Status` with rollback guidance (ops retry allowlist). True distributed transaction is **not** required for v1; document ordering: **allowlist first, then plan** (fail closed: no audits accepted until allowlist exists).
+**Responses:** Same patterns as partition plan — `200` OK, `409` version conflict, `401` unauthenticated, `403` not admin.
 
 ---
 
@@ -386,7 +365,7 @@ On service create/update REST handler in `security-admin`:
 
 1. Read `policy.download.auth.users` for the service.
 2. Map Kerberos principals → short names (same rules as ingestor `auth_to_local`, or store short names only in service def).
-3. Call ingestor `PUT /api/audit/service-allowlist/services/{repo}` (internal HTTP, service account).
+3. Call ingestor `POST /api/audit/partition-plan/onboard-repo` (internal HTTP, service account).
 
 **Pros:** Single source of truth in Policy Manager.  
 **Cons:** Requires Admin → ingestor coupling and credentials.
@@ -536,7 +515,7 @@ Set `dynamic.enabled=false` and restart; static XML values apply again. Kafka to
 
 ## 15. Open questions for review
 
-1. **Topic naming:** `ranger_audit_service_allowlist` vs single document key in an existing config topic?
+1. **Topic naming:** **Resolved** — embed `services` in existing `ranger_audit_partition_plan` document (no second topic).
 2. **Strict vs permissive Admin sync:** Reject allowlist users not in `policy.download.auth.users`?
 3. **Delete repo:** Should DELETE remove partition plan entry too (onboard-plugin rollback)?
 4. **JWT/basic auth:** Allowlist still keyed by short username; document that JWT subjects must match allowlist entries.

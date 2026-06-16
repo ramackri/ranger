@@ -26,8 +26,11 @@ import org.apache.ranger.audit.provider.MiscUtil;
 import org.apache.ranger.audit.server.AuditServerConstants;
 import org.apache.ranger.audit.utils.AuditMessageQueueUtils;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 /** Kafka client settings for the partition-plan registry topic. */
 public final class PartitionPlanKafkaConfig {
@@ -42,6 +45,21 @@ public final class PartitionPlanKafkaConfig {
     /** Returns whether ingestor should load routing from the Kafka plan registry. */
     public static boolean isDynamicPartitionPlanEnabled(Properties props, String propPrefix) {
         return MiscUtil.getBooleanProperty(props, propPrefix + "." + AuditServerConstants.PROP_PARTITION_PLAN_DYNAMIC_ENABLED, false);
+    }
+
+    /** Resolves short usernames allowed to call partition-plan admin REST (empty = any authenticated principal). */
+    public static Set<String> resolvePartitionPlanAdminUsers(Properties props, String propPrefix) {
+        String configured = MiscUtil.getStringProperty(props, propPrefix + "." + AuditServerConstants.PROP_PARTITION_PLAN_ALLOWED_USERS, "");
+        if (configured == null || configured.isBlank()) {
+            return Collections.emptySet();
+        }
+        Set<String> users = new LinkedHashSet<>();
+        for (String user : configured.split(",")) {
+            if (user != null && !user.isBlank()) {
+                users.add(user.trim());
+            }
+        }
+        return users;
     }
 
     /** Returns whether the Kafka producer partitioner should use the in-memory dynamic plan. */

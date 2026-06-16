@@ -21,6 +21,7 @@ package org.apache.ranger.audit.producer.kafka.partition;
 
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanConflictException;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
+import org.apache.ranger.audit.producer.kafka.partition.model.OnboardRepoRequest;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplaceRequest;
 import org.apache.ranger.audit.producer.kafka.partition.model.PromotePluginRequest;
@@ -31,6 +32,7 @@ import org.apache.ranger.audit.server.AuditServerConstants;
 import org.springframework.stereotype.Component;
 
 import java.util.Properties;
+import java.util.Set;
 
 /** REST mutations and reads for the dynamic Kafka partition plan. */
 @Component
@@ -88,13 +90,33 @@ public class PartitionPlanService {
         String auditTopic = resolveAuditTopicName();
         try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
             PartitionPlan current = requirePlan(registry, auditTopic);
-            PartitionPlan next = PartitionPlanAllocator.promotePlugin(current, request.getPluginId(), request.getPartitionCount(), updatedBy);
+            PartitionPlan next = PartitionPlanAllocator.promotePlugin(current, request.getPluginId(), request.getPartitionCount(), updatedBy, request.getRepo(), request.getAllowedUsers());
             return publishMutation(registry, auditTopic, request.getExpectedVersion(), current, next);
         } catch (PartitionPlanException e) {
             throw e;
         } catch (Exception e) {
             throw new PartitionPlanException("Failed to update partition plan for audit topic '" + auditTopic + "'", e);
         }
+    }
+
+    /** Onboards a service repo: upsert allowlist and promote plugin partitions in one plan version. */
+    public PartitionPlan onboardRepo(OnboardRepoRequest request, String updatedBy) {
+        requireDynamicEnabled();
+        String auditTopic = resolveAuditTopicName();
+        try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
+            PartitionPlan current = requirePlan(registry, auditTopic);
+            PartitionPlan next = PartitionPlanAllocator.onboardRepo(current, request.getRepo(), request.getPluginId(), request.getPartitionCount(), request.getAllowedUsers(), updatedBy);
+            return publishMutation(registry, auditTopic, request.getExpectedVersion(), current, next);
+        } catch (PartitionPlanException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PartitionPlanException("Failed to onboard repo in partition plan for audit topic '" + auditTopic + "'", e);
+        }
+    }
+
+    /** Returns configured admin short usernames for partition-plan REST (empty = not restricted beyond authentication). */
+    public Set<String> getPartitionPlanAdminUsers() {
+        return PartitionPlanKafkaConfig.resolvePartitionPlanAdminUsers(configProps, INGESTOR_PROP_PREFIX);
     }
 
     /** Appends tail partitions to a plugin already present in the plan. */

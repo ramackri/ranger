@@ -301,11 +301,7 @@ When `dynamic.enabled=false`: return **404** or **503 Feature disabled**; do not
 
 ## Phase 6 — AuthZ + `/status`
 
-**Status:** **Deferred** — implement in a follow-up PR. Phases 1–5, 7, and 8 are sufficient for initial dynamic-mode rollout.
-
-**Today:** `security-applicationContext.xml` requires authentication for `/api/audit/partition-plan/**`; `AuditDelegationTokenFilter` skips auth only for `/health` and `/status`. Any authenticated principal can call partition-plan (no separate admin allow-list yet). Use `GET /api/audit/partition-plan` for plan health until `/status` is extended.
-
-**Goal:** Restrict partition-plan API to admin users; expose plan health on status endpoint.
+**Phase 6 — AuthZ:** **Done** — `kafka.partition.plan.allowed.users` enforced on partition-plan REST when configured.
 
 ### AuthZ (proposed property)
 

@@ -20,7 +20,11 @@
 package org.apache.ranger.audit.producer.kafka.partition;
 
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
+import org.apache.ranger.audit.producer.kafka.partition.model.ServiceAllowlistEntry;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Hot-path in-memory plan for {@code AuditPartitioner} and the background watcher. */
@@ -50,6 +54,28 @@ public final class PartitionPlanHolder {
         PartitionPlanValidator.validate(plan, kafkaPartitionCount);
         planRef.set(plan);
         lastInstalledVersion = plan.getVersion();
+    }
+
+    /**
+     * Returns allowed short usernames for a service repo from the in-memory registry document.
+     * {@code null} when the plan has no {@code services} block (caller should fall back to static XML).
+     */
+    public Set<String> getAllowedUsersForService(String serviceName) {
+        PartitionPlan plan = planRef.get();
+        if (plan == null || plan.getServices() == null || plan.getServices().isEmpty()) {
+            return null;
+        }
+        ServiceAllowlistEntry entry = plan.getServices().get(serviceName);
+        if (entry == null || entry.getAllowedUsers().isEmpty()) {
+            return Collections.emptySet();
+        }
+        return Collections.unmodifiableSet(new LinkedHashSet<>(entry.getAllowedUsers()));
+    }
+
+    /** True when the loaded plan carries a non-empty service allowlist map. */
+    public boolean hasServiceAllowlist() {
+        PartitionPlan plan = planRef.get();
+        return plan != null && plan.getServices() != null && !plan.getServices().isEmpty();
     }
 
     /** Clears holder state between unit tests. */

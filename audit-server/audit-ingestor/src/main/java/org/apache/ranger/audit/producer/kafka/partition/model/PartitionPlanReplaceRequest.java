@@ -33,13 +33,19 @@ public final class PartitionPlanReplaceRequest {
     private final int topicPartitionCount;
     private final Map<String, PluginPartitionAssignment> plugins;
     private final PluginPartitionAssignment buffer;
+    private final Map<String, ServiceAllowlistEntry> services;
 
     @JsonCreator
-    public PartitionPlanReplaceRequest(@JsonProperty("expectedVersion") int expectedVersion, @JsonProperty("topicPartitionCount") int topicPartitionCount, @JsonProperty("plugins") Map<String, PluginPartitionAssignment> plugins, @JsonProperty("buffer") PluginPartitionAssignment buffer) {
+    public PartitionPlanReplaceRequest(@JsonProperty("expectedVersion") int expectedVersion, @JsonProperty("topicPartitionCount") int topicPartitionCount, @JsonProperty("plugins") Map<String, PluginPartitionAssignment> plugins, @JsonProperty("buffer") PluginPartitionAssignment buffer, @JsonProperty("services") Map<String, ServiceAllowlistEntry> services) {
         this.expectedVersion     = expectedVersion;
         this.topicPartitionCount = topicPartitionCount;
         this.plugins             = copyPlugins(plugins);
         this.buffer              = buffer != null ? buffer : PluginPartitionAssignment.empty();
+        this.services            = copyServices(services);
+    }
+
+    public PartitionPlanReplaceRequest(int expectedVersion, int topicPartitionCount, Map<String, PluginPartitionAssignment> plugins, PluginPartitionAssignment buffer) {
+        this(expectedVersion, topicPartitionCount, plugins, buffer, null);
     }
 
     private static Map<String, PluginPartitionAssignment> copyPlugins(Map<String, PluginPartitionAssignment> plugins) {
@@ -47,6 +53,16 @@ public final class PartitionPlanReplaceRequest {
             return Collections.emptyMap();
         }
         return Collections.unmodifiableMap(new LinkedHashMap<>(plugins));
+    }
+
+    private static Map<String, ServiceAllowlistEntry> copyServices(Map<String, ServiceAllowlistEntry> services) {
+        if (services == null) {
+            return null;
+        }
+        if (services.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return Collections.unmodifiableMap(new LinkedHashMap<>(services));
     }
 
     public int getExpectedVersion() {
@@ -65,15 +81,25 @@ public final class PartitionPlanReplaceRequest {
         return buffer;
     }
 
+    /** When null, the current plan's services map is preserved. */
+    public Map<String, ServiceAllowlistEntry> getServices() {
+        return services;
+    }
+
     /** Converts the REST PUT body into a proposed plan for append-only validation. */
     public PartitionPlan toProposedPlan(PartitionPlan current, String updatedBy) {
-        return PartitionPlan.builder()
+        PartitionPlan.Builder builder = PartitionPlan.builder()
                 .topic(current.getTopic())
                 .topicPartitionCount(topicPartitionCount)
                 .plugins(plugins)
                 .buffer(buffer)
                 .updatedAt(Instant.now().toString())
-                .updatedBy(updatedBy)
-                .build();
+                .updatedBy(updatedBy);
+        if (services != null) {
+            builder.services(services);
+        } else {
+            builder.services(current.getServices());
+        }
+        return builder.build();
     }
 }

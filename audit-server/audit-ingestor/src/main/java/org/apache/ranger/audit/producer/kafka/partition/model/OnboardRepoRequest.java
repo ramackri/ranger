@@ -25,25 +25,25 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Collections;
 import java.util.List;
 
-/** POST /api/audit/partition-plan/promote body. */
-public final class PromotePluginRequest {
+/** POST /api/audit/partition-plan/onboard-repo body. */
+public final class OnboardRepoRequest {
+    private final String repo;
     private final String pluginId;
     private final int partitionCount;
-    private final int expectedVersion;
-    private final String repo;
     private final List<String> allowedUsers;
+    private final int expectedVersion;
 
     @JsonCreator
-    public PromotePluginRequest(@JsonProperty("pluginId") String pluginId, @JsonProperty("partitionCount") int partitionCount, @JsonProperty("expectedVersion") int expectedVersion, @JsonProperty("repo") String repo, @JsonProperty("allowedUsers") List<String> allowedUsers) {
+    public OnboardRepoRequest(@JsonProperty("repo") String repo, @JsonProperty("pluginId") String pluginId, @JsonProperty("partitionCount") int partitionCount, @JsonProperty("allowedUsers") List<String> allowedUsers, @JsonProperty("expectedVersion") int expectedVersion) {
+        this.repo             = repo;
         this.pluginId         = pluginId;
         this.partitionCount   = partitionCount;
-        this.expectedVersion  = expectedVersion;
-        this.repo             = repo;
         this.allowedUsers     = allowedUsers == null ? Collections.emptyList() : List.copyOf(allowedUsers);
+        this.expectedVersion  = expectedVersion;
     }
 
-    public PromotePluginRequest(String pluginId, int partitionCount, int expectedVersion) {
-        this(pluginId, partitionCount, expectedVersion, null, null);
+    public String getRepo() {
+        return repo;
     }
 
     public String getPluginId() {
@@ -54,15 +54,11 @@ public final class PromotePluginRequest {
         return partitionCount;
     }
 
-    public int getExpectedVersion() {
-        return expectedVersion;
-    }
-
-    public String getRepo() {
-        return repo;
-    }
-
     public List<String> getAllowedUsers() {
         return allowedUsers;
+    }
+
+    public int getExpectedVersion() {
+        return expectedVersion;
     }
 }

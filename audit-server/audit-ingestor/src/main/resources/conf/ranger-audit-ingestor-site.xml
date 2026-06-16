@@ -460,6 +460,15 @@
         <value>500</value>
         <description>Kafka consumer poll timeout when draining the compacted plan topic (milliseconds). Default 500.</description>
     </property>
+    <property>
+        <name>ranger.audit.ingestor.kafka.partition.plan.allowed.users</name>
+        <value>admin,ops</value>
+        <description>
+            Comma-separated short usernames allowed to call GET/PUT/POST /api/audit/partition-plan when dynamic.enabled=true.
+            The unified plan document includes plugin partition routing and service allowlist (services map).
+            Plugin daemon users must not appear here.
+        </description>
+    </property>
     -->
 
     <property>

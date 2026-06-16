@@ -41,9 +41,10 @@ public final class PartitionPlan {
     private final String updatedBy;
     private final Map<String, PluginPartitionAssignment> plugins;
     private final PluginPartitionAssignment buffer;
+    private final Map<String, ServiceAllowlistEntry> services;
 
     @JsonCreator
-    public PartitionPlan(@JsonProperty("topic") String topic, @JsonProperty("version") int version, @JsonProperty("topicPartitionCount") int topicPartitionCount, @JsonProperty("updatedAt") String updatedAt, @JsonProperty("updatedBy") String updatedBy, @JsonProperty("plugins") Map<String, PluginPartitionAssignment> plugins, @JsonProperty("buffer") PluginPartitionAssignment buffer) {
+    public PartitionPlan(@JsonProperty("topic") String topic, @JsonProperty("version") int version, @JsonProperty("topicPartitionCount") int topicPartitionCount, @JsonProperty("updatedAt") String updatedAt, @JsonProperty("updatedBy") String updatedBy, @JsonProperty("plugins") Map<String, PluginPartitionAssignment> plugins, @JsonProperty("buffer") PluginPartitionAssignment buffer, @JsonProperty("services") Map<String, ServiceAllowlistEntry> services) {
         this.topic               = topic;
         this.version             = version;
         this.topicPartitionCount = topicPartitionCount;
@@ -51,6 +52,7 @@ public final class PartitionPlan {
         this.updatedBy           = updatedBy;
         this.plugins             = copyPlugins(plugins);
         this.buffer              = buffer != null ? buffer : PluginPartitionAssignment.empty();
+        this.services            = copyServices(services);
     }
 
     private static Map<String, PluginPartitionAssignment> copyPlugins(Map<String, PluginPartitionAssignment> plugins) {
@@ -58,6 +60,13 @@ public final class PartitionPlan {
             return Collections.emptyMap();
         }
         return Collections.unmodifiableMap(new LinkedHashMap<>(plugins));
+    }
+
+    private static Map<String, ServiceAllowlistEntry> copyServices(Map<String, ServiceAllowlistEntry> services) {
+        if (services == null || services.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return Collections.unmodifiableMap(new LinkedHashMap<>(services));
     }
 
     public String getTopic() {
@@ -86,6 +95,10 @@ public final class PartitionPlan {
 
     public PluginPartitionAssignment getBuffer() {
         return buffer;
+    }
+
+    public Map<String, ServiceAllowlistEntry> getServices() {
+        return services;
     }
 
     public Builder toBuilder() {
@@ -127,17 +140,17 @@ public final class PartitionPlan {
             return false;
         }
         PartitionPlan that = (PartitionPlan) o;
-        return version == that.version && topicPartitionCount == that.topicPartitionCount && Objects.equals(topic, that.topic) && Objects.equals(updatedAt, that.updatedAt) && Objects.equals(updatedBy, that.updatedBy) && Objects.equals(plugins, that.plugins) && Objects.equals(buffer, that.buffer);
+        return version == that.version && topicPartitionCount == that.topicPartitionCount && Objects.equals(topic, that.topic) && Objects.equals(updatedAt, that.updatedAt) && Objects.equals(updatedBy, that.updatedBy) && Objects.equals(plugins, that.plugins) && Objects.equals(buffer, that.buffer) && Objects.equals(services, that.services);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(topic, version, topicPartitionCount, updatedAt, updatedBy, plugins, buffer);
+        return Objects.hash(topic, version, topicPartitionCount, updatedAt, updatedBy, plugins, buffer, services);
     }
 
     @Override
     public String toString() {
-        return "PartitionPlan{topic='" + topic + "', version=" + version + ", topicPartitionCount=" + topicPartitionCount + ", plugins=" + plugins.keySet() + ", bufferSize=" + buffer.size() + '}';
+        return "PartitionPlan{topic='" + topic + "', version=" + version + ", topicPartitionCount=" + topicPartitionCount + ", plugins=" + plugins.keySet() + ", bufferSize=" + buffer.size() + ", services=" + services.keySet() + '}';
     }
 
     public static final class Builder {
@@ -148,6 +161,7 @@ public final class PartitionPlan {
         private String updatedBy;
         private Map<String, PluginPartitionAssignment> plugins = new LinkedHashMap<>();
         private PluginPartitionAssignment buffer = PluginPartitionAssignment.empty();
+        private Map<String, ServiceAllowlistEntry> services = new LinkedHashMap<>();
 
         private Builder() {
         }
@@ -160,6 +174,7 @@ public final class PartitionPlan {
             this.updatedBy           = plan.updatedBy;
             this.plugins             = new LinkedHashMap<>(plan.plugins);
             this.buffer              = plan.buffer;
+            this.services            = new LinkedHashMap<>(plan.services);
         }
 
         public Builder topic(String topic) {
@@ -202,8 +217,18 @@ public final class PartitionPlan {
             return this;
         }
 
+        public Builder services(Map<String, ServiceAllowlistEntry> services) {
+            this.services = services == null ? new LinkedHashMap<>() : new LinkedHashMap<>(services);
+            return this;
+        }
+
+        public Builder putService(String repo, ServiceAllowlistEntry entry) {
+            this.services.put(repo, entry);
+            return this;
+        }
+
         public PartitionPlan build() {
-            return new PartitionPlan(topic, version, topicPartitionCount, updatedAt, updatedBy, plugins, buffer);
+            return new PartitionPlan(topic, version, topicPartitionCount, updatedAt, updatedBy, plugins, buffer, services);
         }
     }
 }

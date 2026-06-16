@@ -23,9 +23,11 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.security.authentication.util.KerberosName;
 import org.apache.ranger.audit.model.AuthzAuditEvent;
 import org.apache.ranger.audit.producer.AuditDestinationMgr;
+import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanHolder;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanService;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanConflictException;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
+import org.apache.ranger.audit.producer.kafka.partition.model.OnboardRepoRequest;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplaceRequest;
 import org.apache.ranger.audit.producer.kafka.partition.model.PromotePluginRequest;
@@ -255,17 +257,22 @@ public class AuditREST {
     @GET
     @Path("/partition-plan")
     @Produces("application/json")
-    public Response getPartitionPlan() {
+    public Response getPartitionPlan(@Context HttpServletRequest httpRequest) {
         LOG.debug("==> AuditREST.getPartitionPlan()");
         Response ret;
         if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
             ret = partitionPlanDisabled("GET /partition-plan");
         } else {
-            try {
-                ret = Response.ok(partitionPlanService.getPartitionPlan().toJson()).build();
-            } catch (PartitionPlanException e) {
-                LOG.error("Partition plan GET failed", e);
-                ret = Response.status(Response.Status.SERVICE_UNAVAILABLE).entity(buildErrorResponse(e.getMessage())).build();
+            Response authFailure = authorizePartitionPlanAdmin(httpRequest, "GET /partition-plan");
+            if (authFailure != null) {
+                ret = authFailure;
+            } else {
+                try {
+                    ret = Response.ok(partitionPlanService.getPartitionPlan().toJson()).build();
+                } catch (PartitionPlanException e) {
+                    LOG.error("Partition plan GET failed", e);
+                    ret = Response.status(Response.Status.SERVICE_UNAVAILABLE).entity(buildErrorResponse(e.getMessage())).build();
+                }
             }
         }
         LOG.debug("<== AuditREST.getPartitionPlan(): status={}", ret.getStatus());
@@ -283,15 +290,20 @@ public class AuditREST {
         if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
             ret = partitionPlanDisabled("PUT /partition-plan");
         } else {
-            try {
-                ret = toSuccessfulPartitionPlanResponse(partitionPlanService.replacePartitionPlan(request, resolveUpdatedBy(httpRequest)));
-            } catch (PartitionPlanConflictException e) {
-                ret = toPartitionPlanConflictResponse("PUT /partition-plan", e);
-            } catch (PartitionPlanException e) {
-                ret = toPartitionPlanErrorResponse("PUT /partition-plan", e);
-            } catch (Exception e) {
-                LOG.error("Unexpected error replacing partition plan", e);
-                ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to replace partition plan")).build();
+            Response authFailure = authorizePartitionPlanAdmin(httpRequest, "PUT /partition-plan");
+            if (authFailure != null) {
+                ret = authFailure;
+            } else {
+                try {
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.replacePartitionPlan(request, resolveUpdatedBy(httpRequest)));
+                } catch (PartitionPlanConflictException e) {
+                    ret = toPartitionPlanConflictResponse("PUT /partition-plan", e);
+                } catch (PartitionPlanException e) {
+                    ret = toPartitionPlanErrorResponse("PUT /partition-plan", e);
+                } catch (Exception e) {
+                    LOG.error("Unexpected error replacing partition plan", e);
+                    ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to replace partition plan")).build();
+                }
             }
         }
         LOG.debug("<== AuditREST.putPartitionPlan(): status={}", ret.getStatus());
@@ -309,15 +321,20 @@ public class AuditREST {
         if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
             ret = partitionPlanDisabled("POST /partition-plan/promote");
         } else {
-            try {
-                ret = toSuccessfulPartitionPlanResponse(partitionPlanService.promotePlugin(request, resolveUpdatedBy(httpRequest)));
-            } catch (PartitionPlanConflictException e) {
-                ret = toPartitionPlanConflictResponse("POST /partition-plan/promote", e);
-            } catch (PartitionPlanException e) {
-                ret = toPartitionPlanErrorResponse("POST /partition-plan/promote", e);
-            } catch (Exception e) {
-                LOG.error("Unexpected error promoting plugin in partition plan", e);
-                ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to promote plugin in partition plan")).build();
+            Response authFailure = authorizePartitionPlanAdmin(httpRequest, "POST /partition-plan/promote");
+            if (authFailure != null) {
+                ret = authFailure;
+            } else {
+                try {
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.promotePlugin(request, resolveUpdatedBy(httpRequest)));
+                } catch (PartitionPlanConflictException e) {
+                    ret = toPartitionPlanConflictResponse("POST /partition-plan/promote", e);
+                } catch (PartitionPlanException e) {
+                    ret = toPartitionPlanErrorResponse("POST /partition-plan/promote", e);
+                } catch (Exception e) {
+                    LOG.error("Unexpected error promoting plugin in partition plan", e);
+                    ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to promote plugin in partition plan")).build();
+                }
             }
         }
         LOG.debug("<== AuditREST.promotePlugin(): status={}", ret.getStatus());
@@ -335,18 +352,54 @@ public class AuditREST {
         if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
             ret = partitionPlanDisabled("POST /partition-plan/scale");
         } else {
-            try {
-                ret = toSuccessfulPartitionPlanResponse(partitionPlanService.scalePlugin(request, resolveUpdatedBy(httpRequest)));
-            } catch (PartitionPlanConflictException e) {
-                ret = toPartitionPlanConflictResponse("POST /partition-plan/scale", e);
-            } catch (PartitionPlanException e) {
-                ret = toPartitionPlanErrorResponse("POST /partition-plan/scale", e);
-            } catch (Exception e) {
-                LOG.error("Unexpected error scaling plugin in partition plan", e);
-                ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to scale plugin in partition plan")).build();
+            Response authFailure = authorizePartitionPlanAdmin(httpRequest, "POST /partition-plan/scale");
+            if (authFailure != null) {
+                ret = authFailure;
+            } else {
+                try {
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.scalePlugin(request, resolveUpdatedBy(httpRequest)));
+                } catch (PartitionPlanConflictException e) {
+                    ret = toPartitionPlanConflictResponse("POST /partition-plan/scale", e);
+                } catch (PartitionPlanException e) {
+                    ret = toPartitionPlanErrorResponse("POST /partition-plan/scale", e);
+                } catch (Exception e) {
+                    LOG.error("Unexpected error scaling plugin in partition plan", e);
+                    ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to scale plugin in partition plan")).build();
+                }
             }
         }
         LOG.debug("<== AuditREST.scalePlugin(): status={}", ret.getStatus());
+        return ret;
+    }
+
+    /** Onboards a service repo: upsert allowlist and promote plugin partitions in one plan version. */
+    @POST
+    @Path("/partition-plan/onboard-repo")
+    @Consumes("application/json")
+    @Produces("application/json")
+    public Response onboardRepo(OnboardRepoRequest request, @Context HttpServletRequest httpRequest) {
+        LOG.debug("==> AuditREST.onboardRepo(repo={}, pluginId={})", request != null ? request.getRepo() : null, request != null ? request.getPluginId() : null);
+        Response ret;
+        if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
+            ret = partitionPlanDisabled("POST /partition-plan/onboard-repo");
+        } else {
+            Response authFailure = authorizePartitionPlanAdmin(httpRequest, "POST /partition-plan/onboard-repo");
+            if (authFailure != null) {
+                ret = authFailure;
+            } else {
+                try {
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.onboardRepo(request, resolveUpdatedBy(httpRequest)));
+                } catch (PartitionPlanConflictException e) {
+                    ret = toPartitionPlanConflictResponse("POST /partition-plan/onboard-repo", e);
+                } catch (PartitionPlanException e) {
+                    ret = toPartitionPlanErrorResponse("POST /partition-plan/onboard-repo", e);
+                } catch (Exception e) {
+                    LOG.error("Unexpected error onboarding repo in partition plan", e);
+                    ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to onboard repo in partition plan")).build();
+                }
+            }
+        }
+        LOG.debug("<== AuditREST.onboardRepo(): status={}", ret.getStatus());
         return ret;
     }
 
@@ -377,6 +430,24 @@ public class AuditREST {
     private Response partitionPlanDisabled(String operation) {
         LOG.error("{} rejected: dynamic partition plan is not enabled", operation);
         return Response.status(Response.Status.SERVICE_UNAVAILABLE).entity(buildErrorResponse("Dynamic partition plan is not enabled")).build();
+    }
+
+    /**
+     * When {@code kafka.partition.plan.allowed.users} is configured, restrict partition-plan REST to those short names.
+     * When unset, any authenticated principal may call partition-plan (backward compatible).
+     */
+    private Response authorizePartitionPlanAdmin(HttpServletRequest request, String operation) {
+        String user = getAuthenticatedUser(request);
+        if (StringUtils.isBlank(user)) {
+            LOG.error("{} rejected: authentication required", operation);
+            return Response.status(Response.Status.UNAUTHORIZED).entity(buildErrorResponse("Authentication required")).build();
+        }
+        Set<String> adminUsers = partitionPlanService.getPartitionPlanAdminUsers();
+        if (!adminUsers.isEmpty() && !adminUsers.contains(user)) {
+            LOG.error("{} rejected: user '{}' is not in partition plan admin allowlist", operation, user);
+            return Response.status(Response.Status.FORBIDDEN).entity(buildErrorResponse("User is not authorized to manage partition plan")).build();
+        }
+        return null;
     }
 
     /** Maps service/infrastructure failures to 503; client validation mistakes to 400. */
@@ -487,18 +558,22 @@ public class AuditREST {
      * @return true if user is allowed, false otherwise
      */
     private boolean isAllowedServiceUser(String serviceName, String userName) {
-        boolean ret;
-
-        if (StringUtils.isNotBlank(serviceName) && StringUtils.isNotBlank(userName)) {
-            Set<String> allowedUsers = allowedServiceUsers.get(serviceName);
-
-            ret = allowedUsers != null && allowedUsers.contains(userName);
-        } else {
-            ret = false;
+        if (StringUtils.isBlank(serviceName) || StringUtils.isBlank(userName)) {
+            return false;
         }
 
-        LOG.debug("isAllowedServiceUser(serviceName={}, userName={}): ret={}", serviceName, userName, ret);
+        if (partitionPlanService != null && partitionPlanService.isDynamicPartitionPlanEnabled()) {
+            Set<String> registryUsers = PartitionPlanHolder.getInstance().getAllowedUsersForService(serviceName);
+            if (registryUsers != null) {
+                boolean ret = registryUsers.contains(userName);
+                LOG.debug("isAllowedServiceUser(serviceName={}, userName={}) from registry: ret={}", serviceName, userName, ret);
+                return ret;
+            }
+        }
 
+        Set<String> allowedUsers = allowedServiceUsers.get(serviceName);
+        boolean ret = allowedUsers != null && allowedUsers.contains(userName);
+        LOG.debug("isAllowedServiceUser(serviceName={}, userName={}) from static XML: ret={}", serviceName, userName, ret);
         return ret;
     }
 

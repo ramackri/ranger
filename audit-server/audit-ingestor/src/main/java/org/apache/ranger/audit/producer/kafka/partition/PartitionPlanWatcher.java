@@ -71,6 +71,7 @@ public final class PartitionPlanWatcher implements Runnable {
         registry = new KafkaPartitionPlanRegistry(props, propPrefix);
         Map<String, Object> producerConfig = buildProducerConfigMap();
         PartitionPlan plan = PartitionPlanBootstrap.bootstrapIfEmpty(registry, auditTopicKey, producerConfig);
+        plan = ServiceAllowlistBootstrap.enrichServicesFromXmlIfMissing(plan, props);
         int kafkaPartitionCount = resolveAuditTopicPartitionCount();
         partitionPlanHolder.install(plan, kafkaPartitionCount);
         openConsumerAtLogEnd();
@@ -137,6 +138,7 @@ public final class PartitionPlanWatcher implements Runnable {
         }
         try {
             PartitionPlan plan = PartitionPlan.fromJson(record.value());
+            plan = ServiceAllowlistBootstrap.enrichServicesFromXmlIfMissing(plan, props);
             if (plan.getVersion() <= partitionPlanHolder.getLastInstalledVersion()) {
                 return;
             }

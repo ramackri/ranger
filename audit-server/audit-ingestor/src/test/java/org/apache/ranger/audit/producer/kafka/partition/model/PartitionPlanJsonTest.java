@@ -23,6 +23,7 @@ import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanE
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
@@ -39,6 +40,21 @@ public class PartitionPlanJsonTest {
         assertEquals(plan.getTopicPartitionCount(), parsed.getTopicPartitionCount());
         assertIterableEquals(List.of(0, 1, 2), parsed.getPlugins().get("hdfs").getPartitions());
         assertIterableEquals(List.of(6, 7, 8, 9, 10, 11, 12, 13, 14), parsed.getBuffer().getPartitions());
+    }
+
+    @Test
+    public void testRoundTripPreservesServices() {
+        PartitionPlan plan = PartitionPlan.builder()
+                .topic("ranger_audits")
+                .version(2)
+                .topicPartitionCount(6)
+                .plugins(Map.of("hdfs", PluginPartitionAssignment.of(0, 1, 2)))
+                .buffer(PluginPartitionAssignment.of(3, 4, 5))
+                .services(Map.of("dev_hive", ServiceAllowlistEntry.ofUsers("hive")))
+                .build();
+        PartitionPlan parsed = PartitionPlan.fromJson(plan.toJson());
+
+        assertIterableEquals(List.of("hive"), parsed.getServices().get("dev_hive").getAllowedUsers());
     }
 
     @Test

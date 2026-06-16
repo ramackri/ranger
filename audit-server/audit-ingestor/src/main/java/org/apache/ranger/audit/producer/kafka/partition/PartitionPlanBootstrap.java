@@ -64,6 +64,7 @@ public final class PartitionPlanBootstrap {
                 .updatedBy(PartitionPlanConstants.BOOTSTRAP_UPDATED_BY)
                 .plugins(plugins)
                 .buffer(PluginPartitionAssignment.ofRange(nextPartition, topicPartitionCount - 1))
+                .services(ServiceAllowlistBootstrap.loadFromAuditServerConfig())
                 .build();
 
         PartitionPlanValidator.validate(plan);

@@ -23,6 +23,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PluginPartitionAssignment;
+import org.apache.ranger.audit.producer.kafka.partition.model.ServiceAllowlistEntry;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -35,10 +36,15 @@ public final class PartitionPlanAllocator {
     private PartitionPlanAllocator() {
     }
 
+    public static PartitionPlan promotePlugin(PartitionPlan current, String pluginId, int partitionCount, String updatedBy) {
+        return promotePlugin(current, pluginId, partitionCount, updatedBy, null, null);
+    }
+
     /**
      * Give a plugin its own partitions. Uses buffer IDs first; adds new tail IDs when buffer is too small.
+     * Optionally upserts {@code services[repo]} in the same plan version when {@code repo} and {@code allowedUsers} are set.
      */
-    public static PartitionPlan promotePlugin(PartitionPlan current, String pluginId, int partitionCount, String updatedBy) {
+    public static PartitionPlan promotePlugin(PartitionPlan current, String pluginId, int partitionCount, String updatedBy, String repo, List<String> allowedUsers) {
         requireMutationInputs(current, pluginId, partitionCount, updatedBy);
         if (current.getPlugins().containsKey(pluginId)) {
             throw new PartitionPlanException("Plugin '" + pluginId + "' already has dedicated partitions");
@@ -48,7 +54,22 @@ public final class PartitionPlanAllocator {
         List<Integer> newPluginIds    = takeFromBuffer(remainingBuffer, partitionCount);
         int topicPartitionCount       = appendTailPartitions(newPluginIds, current.getTopicPartitionCount(), partitionCount - newPluginIds.size());
 
-        return commitPlanUpdate(current, updatedBy, topicPartitionCount, addPluginAssignment(current, pluginId, newPluginIds), remainingBuffer);
+        Map<String, PluginPartitionAssignment> plugins = addPluginAssignment(current, pluginId, newPluginIds);
+        Map<String, ServiceAllowlistEntry> services    = mergeServiceAllowlist(current.getServices(), repo, allowedUsers);
+        return commitPlanUpdate(current, updatedBy, topicPartitionCount, plugins, remainingBuffer, services);
+    }
+
+    /**
+     * Onboard a Ranger service repo: promote plugin partitions and upsert service allowlist atomically.
+     */
+    public static PartitionPlan onboardRepo(PartitionPlan current, String repo, String pluginId, int partitionCount, List<String> allowedUsers, String updatedBy) {
+        if (StringUtils.isBlank(repo)) {
+            throw new PartitionPlanException("repo is required");
+        }
+        if (allowedUsers == null || allowedUsers.isEmpty()) {
+            throw new PartitionPlanException("allowedUsers are required");
+        }
+        return promotePlugin(current, pluginId, partitionCount, updatedBy, repo, allowedUsers);
     }
 
     /**
@@ -63,7 +84,7 @@ public final class PartitionPlanAllocator {
         List<Integer> pluginIds = new ArrayList<>(current.getPlugins().get(pluginId).getPartitions());
         int topicPartitionCount = appendTailPartitions(pluginIds, current.getTopicPartitionCount(), additionalPartitions);
 
-        return commitPlanUpdate(current, updatedBy, topicPartitionCount, addPluginAssignment(current, pluginId, pluginIds), current.getBuffer().getPartitions());
+        return commitPlanUpdate(current, updatedBy, topicPartitionCount, addPluginAssignment(current, pluginId, pluginIds), current.getBuffer().getPartitions(), current.getServices());
     }
 
     /** Full plan replace (REST PUT) with append-only checks against the current plan. */
@@ -103,18 +124,27 @@ public final class PartitionPlanAllocator {
         return plugins;
     }
 
-    private static PartitionPlan commitPlanUpdate(PartitionPlan current, String updatedBy, int topicPartitionCount, Map<String, PluginPartitionAssignment> plugins, List<Integer> bufferIds) {
+    private static PartitionPlan commitPlanUpdate(PartitionPlan current, String updatedBy, int topicPartitionCount, Map<String, PluginPartitionAssignment> plugins, List<Integer> bufferIds, Map<String, ServiceAllowlistEntry> services) {
         PartitionPlan next = current.toBuilder()
                 .version(current.getVersion() + 1)
                 .topicPartitionCount(topicPartitionCount)
                 .plugins(plugins)
                 .buffer(new PluginPartitionAssignment(bufferIds))
+                .services(services != null ? services : current.getServices())
                 .updatedAt(Instant.now().toString())
                 .updatedBy(updatedBy)
                 .build();
         PartitionPlanValidator.validate(next);
         PartitionPlanValidator.validateAppendOnly(current, next);
         return next;
+    }
+
+    private static Map<String, ServiceAllowlistEntry> mergeServiceAllowlist(Map<String, ServiceAllowlistEntry> currentServices, String repo, List<String> allowedUsers) {
+        Map<String, ServiceAllowlistEntry> services = new LinkedHashMap<>(currentServices);
+        if (StringUtils.isNotBlank(repo) && allowedUsers != null && !allowedUsers.isEmpty()) {
+            services.put(repo.trim(), ServiceAllowlistEntry.ofUsers(allowedUsers));
+        }
+        return services;
     }
 
     private static void requireMutationInputs(PartitionPlan current, String pluginId, int partitionCount, String updatedBy) {

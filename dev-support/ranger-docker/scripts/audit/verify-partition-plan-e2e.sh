@@ -136,6 +136,14 @@ run_dynamic_tests() {
     pp_record_fail "topicPartitionCount=${topic_count} kafka=${kafka_parts}"
   fi
 
+  local services_count
+  services_count="$(printf '%s' "${HTTP_BODY}" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('services') or {}))" 2>/dev/null || echo "0")"
+  if [[ "${services_count}" -ge 1 ]]; then
+    pp_record_pass "plan includes services allowlist (${services_count} repos)"
+  else
+    pp_record_fail "plan missing services allowlist map"
+  fi
+
   promote_plugin="${PROMOTE_PLUGIN}"
   if [[ "${PROMOTE_PLUGIN}" == "storm" ]]; then
     promote_plugin="$(pp_pick_buffer_promote_plugin "${CONTAINER}" "${PLAN_URL}")"

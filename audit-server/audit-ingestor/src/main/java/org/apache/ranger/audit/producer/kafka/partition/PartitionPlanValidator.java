@@ -24,6 +24,7 @@ import org.apache.ranger.audit.producer.kafka.partition.constants.PartitionPlanC
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PluginPartitionAssignment;
+import org.apache.ranger.audit.producer.kafka.partition.model.ServiceAllowlistEntry;
 
 import java.util.HashSet;
 import java.util.List;
@@ -58,6 +59,23 @@ public final class PartitionPlanValidator {
         }
         if (assigned.size() != plan.getTopicPartitionCount()) {
             throw new PartitionPlanException("Partition plan must assign every topic partition exactly once");
+        }
+        validateServices(plan.getServices());
+    }
+
+    /** When present, each service entry must declare at least one allowed short username. */
+    public static void validateServices(Map<String, ServiceAllowlistEntry> services) {
+        if (services == null || services.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, ServiceAllowlistEntry> entry : services.entrySet()) {
+            if (StringUtils.isBlank(entry.getKey())) {
+                throw new PartitionPlanException("Service repo name is required");
+            }
+            ServiceAllowlistEntry allowlistEntry = entry.getValue();
+            if (allowlistEntry == null || allowlistEntry.getAllowedUsers().isEmpty()) {
+                throw new PartitionPlanException("allowedUsers must not be empty for service '" + entry.getKey() + "'");
+            }
         }
     }
 

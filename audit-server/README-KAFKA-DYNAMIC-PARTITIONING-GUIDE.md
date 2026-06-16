@@ -17,30 +17,44 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Dynamic Kafka partitioning for Ranger audit plugins — guide for everyone
+# Dynamic ingestor registry for Ranger audit-ingestor — guide for everyone
 
-This guide explains **why** and **how** Ranger can move from **static** plugin-to-partition mapping (set once at startup) to **dynamic** mapping (change at runtime without restarting the audit ingestor).
+This guide explains **why** and **how** Ranger moves from **static** ingestor configuration (XML at startup) to a **dynamic unified registry** at runtime — **without restarting** audit-ingestor.
+
+It covers both:
+
+1. **Kafka partition routing** — which plugin uses which `ranger_audits` partitions  
+2. **Service allowlist** — which principals may `POST /api/audit/access` for each Ranger repo  
+
+Both live in one Kafka document on **`ranger_audit_partition_plan`** (`plugins`, `buffer`, and `services`). One REST API: **`/api/audit/partition-plan`**.
 
 It is written for operators, architects, and reviewers who need a shared mental model — **without reading the codebase**.
 
----
+**Confluence:** [Dynamic Ingestor Registry Guide (Ranger Audit Ingestor)](https://cloudera.atlassian.net/wiki/spaces/ENG/pages/12043681813) (child of [Ranger Engineering](https://cloudera.atlassian.net/wiki/spaces/ENG/pages/759726545/Ranger+Engineering))
+
+**Related design docs:** [README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md](README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md) · [DESIGN-KAFKA-DYNAMIC-PARTITIONING.md](DESIGN-KAFKA-DYNAMIC-PARTITIONING.md)
 
 ## 1. What problem are we solving?
 
-Ranger plugins (HDFS, Hive, Trino, etc.) send audit events to **audit-ingestor**, which writes them to a Kafka topic (default: `ranger_audits`).
+Ranger plugins (HDFS, Hive, Trino, Ozone OM, etc.) send audit events to **audit-ingestor**, which writes them to Kafka (`ranger_audits`).
 
-To keep high-volume plugins from starving others, ingestor can assign **dedicated Kafka partitions** per plugin. Unlisted plugins share a **buffer** pool of partitions.
+Ingestor performs **two** configuration jobs:
+
+| Job | Question | Static today | Dynamic goal |
+|-----|----------|--------------|--------------|
+| **Service allowlist** | May this Kerberos principal POST audits claiming repo `R`? | XML `service.<repo>.allowed.users` at startup | `services` map in unified registry |
+| **Partition routing** | After accept, which Kafka partition? | XML `configured.plugins` at startup | `plugins` / `buffer` in unified registry |
 
 **Today (static mode):**
 
-- Which plugin uses which partitions is defined in **XML config** at startup.
-- Adding a plugin or giving a hot plugin more partitions usually means: edit config → increase topic partitions → **restart ingestor**.
+- Allowlist and partition layout are defined in **XML** at startup.
+- Adding a repo or plugin usually means: edit XML → **restart ingestor** on every pod.
 
 **Goal (dynamic mode):**
 
-- Change partition assignments **while ingestor is running**.
-- Onboard a new plugin without reshuffling partitions already used by other plugins.
-- Grow capacity by adding **new partitions at the end** of the topic (append-only), not by recomputing everyone’s ranges.
+- Change allowlist **and** partition assignments **while ingestor is running**.
+- Onboard a new plugin/repo without reshuffling existing partition assignments (append-only).
+- Keep all ingestor replicas consistent via one shared Kafka compacted topic.
 
 ---
 
@@ -59,12 +73,12 @@ Kafka allows **increasing** partition count; it does **not** support shrinking.
 
 The plugin id (also called agent id / app id) identifies the source of the audit — e.g. `hdfs`, `hiveServer2`, `trino`.
 
-### Partition plan
+### Partition plan (unified registry document)
 
-A **partition plan** is a versioned JSON document that answers:
+A **partition plan** is a versioned JSON document stored in `ranger_audit_partition_plan`. It answers:
 
-- For each known plugin: **which partition numbers** may receive its audits?
-- Which partition numbers are reserved for **unknown / new** plugins (the buffer)?
+- For each known plugin: **which partition numbers** may receive its audits? (`plugins` + `buffer`)
+- For each Ranger service repo: **which short usernames** may `POST /access`? (`services`)
 - What is the current **`topicPartitionCount`** (must match Kafka)?
 
 Example (simplified):
@@ -78,15 +92,24 @@ Example (simplified):
     "hdfs":        { "partitions": [0, 1, 2, 3, 4, 5] },
     "hiveServer2": { "partitions": [6, 7, 8, 9, 10, 11] }
   },
-  "buffer": { "partitions": [12, 13, 14, "... through 47 ..."] }
+  "buffer": { "partitions": [12, 13, 14, "... through 47 ..."] },
+  "services": {
+    "dev_hive":  { "allowedUsers": ["hive"] },
+    "dev_ozone": { "allowedUsers": ["om", "ozone"] },
+    "dev_trino": { "allowedUsers": ["trino"] }
+  }
 }
 ```
 
-The `version` field increments on every successful admin change (optimistic locking).
+The `version` field increments on every successful admin change (optimistic locking) — **one version** for routing and allowlist mutations.
 
-Every ingestor pod uses the **same** plan so routing stays consistent.
+Every ingestor pod uses the **same** document so routing and authorization stay consistent.
 
-### Partition registry (source of truth)
+### Service allowlist (`POST /api/audit/access`)
+
+Plugins authenticate (Kerberos/JWT), then ingestor checks `services[serviceName].allowedUsers` (short names after `auth_to_local`). Failure → **403** before any Kafka produce. This check is **orthogonal** to partition routing but stored in the **same** registry document when dynamic mode is on.
+
+### Unified registry (source of truth)
 
 The live plan lives in **durable shared storage** that all ingestor replicas read — a Kafka **compacted** topic (`ranger_audit_partition_plan`).
 
@@ -110,13 +133,13 @@ Plugins not yet in the plan (or newly appearing in the fleet) go to **buffer** p
 
 ## 3. Today vs proposed (at a glance)
 
-| | Static (today) | Dynamic (proposed) |
-|---|----------------|---------------------|
-| **Where mapping lives** | XML on each pod at startup | Shared plan in Kafka compacted topic |
-| **Change mapping** | Edit XML + restart | REST API; no restart |
-| **Add new plugin** | Edit `configured.plugins`, often reshuffles ranges | Promote from buffer; allocate from tail only |
-| **Scale hot plugin** | Edit overrides + restart | Add tail partitions + update plan |
-| **Multi-replica ingestor** | Same XML if synced via ConfigMap | All pods watch same Kafka plan |
+| | Static (today) | Dynamic (unified registry) |
+|---|----------------|---------------------------|
+| **Where config lives** | XML on each pod at startup | `ranger_audit_partition_plan` (`plugins` + `services`) |
+| **Change allowlist or routing** | Edit XML + restart | `/api/audit/partition-plan` REST; no restart |
+| **Add new plugin/repo** | XML + restart | `POST .../onboard-repo` or promote + `services` update |
+| **Scale hot plugin** | Edit overrides + restart | `POST .../scale` (append-only tail partitions) |
+| **Multi-replica ingestor** | Same XML if synced via ConfigMap | All pods watch same Kafka document |
 | **Feature flag** | Default behavior | `ranger.audit.ingestor.kafka.partition.plan.dynamic.enabled=true` |
 
 ---
@@ -179,7 +202,7 @@ sequenceDiagram
   alt plan message exists
     Plan-->>Pod: use stored plan — skip XML bootstrap
   else registry empty
-    Pod->>XML: build first plan from XML layout
+    Pod->>XML: build first plan from XML (plugins + services)
     Pod->>Plan: re-read (Race B — peer may have published)
     Pod->>Plan: publish first plan if still empty
     Pod->>Plan: mandatory read-back
@@ -214,16 +237,17 @@ After the first plan is stored in Kafka, **Kafka is the source of truth** for ro
 | Plane | Kafka topic | Traffic | Who reads/writes |
 |-------|-------------|---------|------------------|
 | **Data** | `ranger_audits` | High — every audit event | Plugins → ingestor → dispatchers |
-| **Control** | `ranger_audit_partition_plan` (compacted) | Low — rare plan changes | Admin REST + background sync on ingestor pods |
+| **Control (unified registry)** | `ranger_audit_partition_plan` (compacted) | Low — rare routing + allowlist changes | `/api/audit/partition-plan` REST + `PartitionPlanWatcher` |
 
-The partition plan is **configuration**, not audit data. Ingestor keeps the current plan **in memory**; only the background sync thread and REST handlers touch the plan topic.
+The registry is **configuration**, not audit data. Ingestor keeps the current document **in memory**; only the watcher and REST handlers touch the plan topic.
 
 ### Architecture (control plane vs data plane)
 
 ```mermaid
 flowchart TB
   subgraph plugins [Ranger plugins]
-    PluginIn[HDFS / Hive / new plugins]
+    HS2[HiveServer2]
+    OM[Ozone OM]
   end
 
   subgraph ops [Ops or automation]
@@ -231,10 +255,11 @@ flowchart TB
   end
 
   subgraph ingestor [Each audit-ingestor pod]
-    REST[Partition-plan REST API]
-    Svc[Plan update service]
-    Watcher[Background plan sync]
-    Mem[(In-memory plan)]
+    Access["POST /api/audit/access"]
+    REST["GET/PUT/POST /partition-plan"]
+    Svc[PartitionPlanService]
+    Watcher[PartitionPlanWatcher]
+    Mem[(In-memory PartitionPlan<br/>plugins + services)]
     Part[Partition router]
     Queue[Audit queue]
 
@@ -242,15 +267,18 @@ flowchart TB
     Svc --> PlanTopic
     Watcher -->|poll / consume| PlanTopic
     Watcher -->|atomic swap| Mem
+    HS2 -->|serviceName=dev_hive| Access
+    OM -->|serviceName=dev_ozone| Access
+    Access -->|isAllowedServiceUser from services| Mem
+    Access -->|on 200/202| Queue
     Mem --> Part
-    PluginIn -->|POST /access| Queue
     Queue --> Part
-    Part -->|Kafka produce key=plugin id| AuditTopic
+    Part -->|key=plugin id| AuditTopic
   end
 
   subgraph kafka [Kafka]
-    PlanTopic[(ranger_audit_partition_plan<br/>compacted, low volume)]
-    AuditTopic[(ranger_audits<br/>high volume)]
+    PlanTopic[(ranger_audit_partition_plan<br/>plugins + services)]
+    AuditTopic[(ranger_audits)]
   end
 
   subgraph consumers [Downstream — unchanged]
@@ -258,7 +286,7 @@ flowchart TB
     HDFSdisp[HDFS dispatcher]
   end
 
-  Admin -->|GET / PUT via load balancer| REST
+  Admin -->|via load balancer| REST
   Svc -->|createPartitions if needed| AuditTopic
   AuditTopic --> Solr
   AuditTopic --> HDFSdisp
@@ -269,10 +297,10 @@ flowchart TB
 When dynamic mode starts and the plan registry is **empty**:
 
 1. Ingestor enables dynamic mode.
-2. Background sync finds no plan in `ranger_audit_partition_plan`.
-3. Ingestor reads XML (`configured.plugins`, overrides, buffer).
-4. Ingestor builds and publishes the **first plan** to the compacted topic.
-5. Ingestor loads that plan into memory and begins routing audits.
+2. Watcher finds no document in `ranger_audit_partition_plan`.
+3. Ingestor reads XML (`configured.plugins`, overrides, buffer, and `service.*.allowed.users`).
+4. Ingestor builds and publishes the **first document** (`plugins` + `services`) to the compacted topic.
+5. Ingestor loads that document into memory and begins enforcing allowlist + routing.
 
 **After that:** additional pods and restarts **read Kafka only** — they do not re-build from XML.
 
@@ -280,10 +308,18 @@ When dynamic mode starts and the plan registry is **empty**:
 
 The plan topic is **not** read on this path.
 
-1. Plugin POSTs audit to ingestor.
-2. Partition router reads the **in-memory** plan.
-3. Known plugin → round-robin within its partition list.
-4. Unknown plugin → buffer partition.
+```text
+Plugin POST /api/audit/access?serviceName=dev_hive&appId=hiveServer2
+        │
+        ├─ 401  Authentication failed
+        ├─ 403  services[dev_hive] does not include short username → STOP
+        └─ 200/202  Allowlist passed → partition router → ranger_audits
+```
+
+1. Plugin POSTs audit to ingestor (authenticate).
+2. `isAllowedServiceUser` reads **in-memory** `services` map (or static XML when dynamic off).
+3. Partition router reads **in-memory** `plugins` / `buffer`.
+4. Known plugin → round-robin within its partition list; unknown → buffer.
 5. Record written to `ranger_audits`.
 
 ### Changing the plan — admin or automation
@@ -312,7 +348,7 @@ sequenceDiagram
   participant Mem as In-memory plan
   participant Part as Partition router
 
-  Admin->>REST: promote / scale / PUT plan
+  Admin->>REST: promote / scale / onboard-repo / PUT plan
   REST->>Plan: read current plan version
   REST->>Audit: createPartitions (if needed)
   REST->>Plan: write new plan version
@@ -328,28 +364,30 @@ sequenceDiagram
 
 ### Rules to remember
 
-- **Two topics, two jobs** — plan topic = config; audit topic = data.
+- **Two topics, two jobs** — plan topic = unified config (`plugins` + `services`); audit topic = data.
 - **Memory on the hot path** — no per-audit read of the plan topic.
-- **Kafka is the source of truth** after the first plan is published.
+- **Kafka is the source of truth** after the first document is published.
 - **Append-only growth** — new partitions only at the tail of `ranger_audits`.
 - **All pods must agree** — every ingestor syncs from the same compacted topic.
+- **Allowlist and routing are separate checks** — 403 on `/access` is allowlist; wrong partition is routing.
 
 ---
 
 ## 6. Admin REST API (control plane)
 
-When dynamic mode is on, operators change routing through the **ingestor admin API** on **any** pod (usually via load balancer). Mutations are written to `ranger_audit_partition_plan`; every pod picks up changes through background sync (~30s).
+When dynamic mode is on, operators change routing **and** allowlists through **`/api/audit/partition-plan`** on **any** pod (usually via load balancer). Mutations are written to `ranger_audit_partition_plan`; every pod picks up changes through `PartitionPlanWatcher` (~30s).
 
-**Auth:** Kerberos or JWT (same ingestor admin pattern as other audit APIs). Dynamic mode off → all partition-plan calls return **503**.
+**Auth:** Kerberos or JWT. When `kafka.partition.plan.allowed.users` is set, only those short names may call partition-plan REST (plugin users must not). Dynamic mode off → all partition-plan calls return **503**.
 
 ### Endpoints
 
 | Method | Path | Use when |
 |--------|------|----------|
-| `GET` | `/api/audit/partition-plan` | Read current plan (from in-memory copy on that pod) |
-| `PUT` | `/api/audit/partition-plan` | Replace the full plan (advanced / corrections) |
-| `POST` | `/api/audit/partition-plan/promote` | Give a **new** plugin dedicated partitions (from buffer) |
-| `POST` | `/api/audit/partition-plan/scale` | Add more partitions to a plugin **already** in the plan |
+| `GET` | `/api/audit/partition-plan` | Read current document (`plugins`, `buffer`, `services`, `version`) |
+| `PUT` | `/api/audit/partition-plan` | Replace full document (advanced); optional `services` in body |
+| `POST` | `/api/audit/partition-plan/promote` | Promote plugin; optional `repo` + `allowedUsers` |
+| `POST` | `/api/audit/partition-plan/onboard-repo` | Upsert `services[repo]` + promote plugin (one version) |
+| `POST` | `/api/audit/partition-plan/scale` | Add tail partitions to existing plugin |
 
 Base URL example: `https://<ingestor-host>:7081/api/audit/partition-plan`
 
@@ -366,7 +404,20 @@ GET /api/audit/partition-plan
 → 200 + JSON plan (note the "version" field)
 ```
 
-**Promote** — e.g. onboard `trino` from buffer with 3 dedicated partitions:
+**Onboard repo** — allowlist + promote in one call:
+
+```json
+POST /api/audit/partition-plan/onboard-repo
+{
+  "repo": "dev_trino",
+  "pluginId": "trino",
+  "allowedUsers": ["trino"],
+  "partitionCount": 3,
+  "expectedVersion": 4
+}
+```
+
+**Promote** — e.g. onboard `trino` from buffer with 3 dedicated partitions (optional allowlist):
 
 ```json
 POST /api/audit/partition-plan/promote
@@ -411,7 +462,7 @@ flowchart LR
 
 | Step | What the ingestor does |
 |------|------------------------|
-| 1 | Authenticate the caller |
+| 1 | Authenticate caller; check `kafka.partition.plan.allowed.users` when configured |
 | 2 | Read current plan from `ranger_audit_partition_plan` |
 | 3 | Reject if `expectedVersion` does not match |
 | 4 | Compute new plugin lists (append-only — no reshuffling existing slots) |
@@ -423,7 +474,38 @@ flowchart LR
 
 ---
 
-## 7. Operator workflow: onboarding a plugin
+## 7. Operator workflow: onboarding a plugin or repo
+
+**Recommended:** one `POST /partition-plan/onboard-repo` when you need **both** allowlist and dedicated partitions.
+
+### Stage 0 — Create service in Ranger Admin
+
+1. Create service `dev_trino` in Policy Manager; set `policy.download.auth.users`.
+2. Configure plugin audit destination → ingestor URL (`:7081`).
+
+### Stage 1 — Onboard via unified registry
+
+```http
+POST /api/audit/partition-plan/onboard-repo
+```
+
+All ingestors apply within ~30s. **No restart** required.
+
+### Stage 2 — Verify plugin POST
+
+Expect **200/202** on `/access`, not **403**.
+
+### Stage 3 — Scale (optional)
+
+Call `POST /api/audit/partition-plan/scale` for hot plugins.
+
+**Do not** edit `ranger-audit-ingestor-site.xml` on one pod for runtime changes. XML is only for **initial bootstrap** when the registry is empty.
+
+---
+
+## 8. Operator workflow: partition-only changes
+
+Use when allowlist already exists and you only need routing changes.
 
 ### Stage 0 — Plugin appears (unknown)
 
@@ -444,21 +526,24 @@ flowchart LR
 
 ---
 
-## 8. Configuration (dynamic mode)
+## 9. Configuration (dynamic mode)
 
 | Property | Purpose | Example |
 |----------|---------|---------|
-| `ranger.audit.ingestor.kafka.partition.plan.dynamic.enabled` | Turn dynamic mode on/off | `false` (default) = static XML |
-| `ranger.audit.ingestor.kafka.partition.plan.topic` | Compacted plan topic name | `ranger_audit_partition_plan` |
+| `ranger.audit.ingestor.kafka.partition.plan.dynamic.enabled` | Turn dynamic unified registry on/off | `false` (default) = static XML |
+| `ranger.audit.ingestor.kafka.partition.plan.topic` | Compacted registry topic name | `ranger_audit_partition_plan` |
 | `ranger.audit.ingestor.kafka.partition.plan.refresh.interval.ms` | How often pods reload plan | `30000` |
+| `ranger.audit.ingestor.kafka.partition.plan.allowed.users` | Who may call partition-plan REST | `admin,ops` |
+| `ranger.audit.ingestor.service.<repo>.allowed.users` | Static bootstrap per-repo allowlist | `hive`, `om,ozone`, … |
+| `ranger.audit.ingestor.auth.to.local` | Principal → short name rules | Same as Hadoop `hadoop.security.auth_to_local` |
 
-When dynamic is **off**, routing is fixed from XML at startup and the plan topic is not used.
+When dynamic is **off**, routing and allowlist are fixed from XML at startup; the plan topic is not used.
 
-When dynamic is **on** and the registry is **empty**, the first ingestor pod seeds the plan from XML. Later pods and restarts read **Kafka only**.
+When dynamic is **on** and the registry is **empty**, the first ingestor pod seeds the plan (`plugins` + `services`) from XML. Later pods and restarts read **Kafka only**.
 
 ---
 
-## 9. FAQ
+## 10. FAQ
 
 ### Basics
 
@@ -578,17 +663,64 @@ No. Per-pod spool and retry when Kafka is briefly unavailable works as today.
 No. Batch size, linger, and compression are separate settings.
 
 **Who can call partition-plan REST?**  
-Authenticated admin callers on ingestor (Kerberos/JWT). Plugin audit POST users are a different path — they send audits, not plan changes.
+Ops principals in `kafka.partition.plan.allowed.users` when configured (Kerberos/JWT). Plugin users (`hive`, `om`) send audits via `/access` — they must **not** mutate the registry.
+
+### Service allowlist (`POST /api/audit/access`)
+
+**Why do we need an allowlist if Kerberos already authenticates the plugin?**  
+Authentication proves *who* connected. Authorization proves they may **claim audits for this repo**. Kerberos success alone would let any daemon POST as any `serviceName`.
+
+**Does dynamic partition plan remove the allowlist check?**  
+**No.** Partition routing runs **after** `/access` accepts the batch. **403** on `/access` is always a **service allowlist** failure (not routing).
+
+**What is `serviceName`?**  
+The Ranger Policy Manager **repo name** (e.g. `dev_hive`), not the service type (`hive`).
+
+**What goes in `allowedUsers`?**  
+Short names after `auth_to_local` — same values as `policy.download.auth.users` on the Ranger service (or a subset).
+
+**Consistency rule (ops discipline):**  
+`allowedUsers for repo R ⊆ { short names from policy.download.auth.users for R in Ranger Admin }`. Ranger Admin does not auto-sync in Phase 1; ingestor may reject REST writes that violate subset rules (strict mode).
+
+**Three layers — do not merge:**
+
+| Layer | Who | Purpose |
+|-------|-----|---------|
+| **Service allowlist** (plugin POST) | Daemons (`hive`, `om`, …) | May this principal POST audits for repo `R`? |
+| **Partition plan** (Kafka routing) | Ingestor internal | Which Kafka partition after accept? |
+| **Admin REST APIs** | Ops (`admin`, `ops`, …) | Who may change the unified registry via `/api/audit/partition-plan`? |
+
+**If you see…**
+
+| Symptom | Layer | Fix |
+|---------|-------|-----|
+| **401** on `/access` | Authentication | Plugin / ingestor Kerberos, keytabs, SPNEGO |
+| **403** on `/access` | **Service allowlist** | Add short name via `onboard-repo` or `PUT` `services` |
+| Audits accepted but wrong Kafka partition | **Partition plan** | `promote` / `scale` |
+| New repo in Admin, audits still **403** | Allowlist not onboarded | `POST .../onboard-repo` (partition plan alone is not enough) |
+| Allowlist OK, audits in buffer partition | Partition plan not onboarded | `promote` plugin (allowlist alone is not enough) |
+
+**Plugin gets 403 but Kerberos works — what now?**  
+Short name not in `services[repo].allowedUsers`, wrong `serviceName`, or `auth_to_local` mismatch.
+
+**New repo in Admin UI, still 403?**  
+Creating the service in Admin does not auto-update ingestor (Phase 1). Call `POST /api/audit/partition-plan/onboard-repo`.
+
+**Do I need both allowlist and partition plan for a new plugin?**  
+Yes for full production onboarding. Use `onboard-repo` to update both in **one** plan version.
+
+**Is there a bundled API?**  
+`POST /api/audit/partition-plan/onboard-repo` upserts `services[repo]` and promotes plugin partitions atomically.
 
 ---
 
-## Docs
+## 11. Docs
 
 | Doc | Purpose |
 |-----|---------|
+| [README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md](README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md) | Service allowlist design (unified `services` map) |
 | [DESIGN-KAFKA-DYNAMIC-PARTITIONING.md](DESIGN-KAFKA-DYNAMIC-PARTITIONING.md) | Partition plan architecture |
 | [README-KAFKA-PARTITION-PLAN-REGISTRY-REST.md](README-KAFKA-PARTITION-PLAN-REGISTRY-REST.md) | Partition-plan Kafka topic + REST |
 | [README-KAFKA-PARTITION-PLAN-IMPLEMENTATION.md](README-KAFKA-PARTITION-PLAN-IMPLEMENTATION.md) | Partition-plan implementation phases |
-| [README-DYNAMIC-SERVICE-ALLOWLIST-GUIDE.md](README-DYNAMIC-SERVICE-ALLOWLIST-GUIDE.md) | **Service allowlist** operator guide (Surface 1 — orthogonal to partition routing) |
-| [README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md](README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md) | Service allowlist design proposal |
 | [DESIGN-KAFKA-AUDIT-SERVER.md](DESIGN-KAFKA-AUDIT-SERVER.md) | End-to-end audit pipeline |
+| [PR #1017](https://github.com/apache/ranger/pull/1017) (RANGER-5645) | Static Docker allowlist fix |
