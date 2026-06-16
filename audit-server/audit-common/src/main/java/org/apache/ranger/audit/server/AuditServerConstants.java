@@ -62,6 +62,17 @@ public class AuditServerConstants {
     public static final String PROP_BUFFER_PARTITIONS                        = "kafka.topic.partitions.buffer";
     public static final String PROP_REPLICATION_FACTOR                       = "kafka.replication.factor";
 
+    // Dynamic partition plan (Kafka compacted registry topic)
+    public static final String PROP_PARTITION_PLAN_TOPIC                     = "kafka.partition.plan.topic";
+    public static final String PROP_PARTITION_PLAN_REFRESH_INTERVAL_MS       = "kafka.partition.plan.refresh.interval.ms";
+    public static final String PROP_PARTITION_PLAN_CONSUMER_POLL_TIMEOUT_MS  = "kafka.partition.plan.consumer.poll.timeout.ms";
+    public static final String PROP_PARTITION_PLAN_DYNAMIC_ENABLED           = "kafka.partition.plan.dynamic.enabled";
+    public static final String DEFAULT_PARTITION_PLAN_TOPIC                  = "ranger_audit_partition_plan";
+    public static final int    DEFAULT_PARTITION_PLAN_REFRESH_INTERVAL_MS    = 30000;
+    public static final int    DEFAULT_PARTITION_PLAN_CONSUMER_POLL_TIMEOUT_MS = 500;
+    public static final int    PARTITION_PLAN_TOPIC_PARTITION_COUNT          = 1;
+    public static final String KAFKA_TOPIC_CLEANUP_POLICY_COMPACT            = "compact";
+
     // Kafka producer tuning (ranger.audit.ingestor.kafka.producer.*)
     public static final String PROP_KAFKA_PRODUCER_PREFIX                    = "kafka.producer.";
     public static final String PROP_PRODUCER_BATCH_SIZE                        = "batch.size";

@@ -22,6 +22,10 @@ package org.apache.ranger.audit.producer.kafka;
 import org.apache.kafka.clients.producer.Partitioner;
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.PartitionInfo;
+import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanHolder;
+import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanKafkaConfig;
+import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
+import org.apache.ranger.audit.producer.kafka.partition.model.PluginPartitionAssignment;
 import org.apache.ranger.audit.server.AuditServerConstants;
 import org.apache.ranger.audit.utils.AuditServerLogFormatter;
 import org.slf4j.Logger;
@@ -50,11 +54,19 @@ public class AuditPartitioner implements Partitioner {
     private int[]    configuredPluginPartitionEnd;
     private int      bufferPartitionStart;
     private int      bufferPartitionCount;
+    private boolean  dynamicPlanEnabled;
     private final    ConcurrentHashMap<String, AtomicInteger> appIdCounters = new ConcurrentHashMap<>();
 
     @Override
     public void configure(Map<String, ?> configs) {
         String propPrefix = AuditServerConstants.PROP_PREFIX_AUDIT_SERVER;
+        String ingestorPropPrefix = propPrefix.substring(0, propPrefix.length() - 1);
+        dynamicPlanEnabled = PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(configs, ingestorPropPrefix);
+        if (dynamicPlanEnabled) {
+            LOG.info("Dynamic partition plan enabled — routing from in-memory plan (PartitionPlanHolder)");
+            logDynamicPlanConfiguration(configs, propPrefix);
+            return;
+        }
 
         String pluginsStr = getConfig(configs, propPrefix + AuditServerConstants.PROP_CONFIGURED_PLUGINS,  AuditServerConstants.DEFAULT_CONFIGURED_PLUGINS);
         configuredPlugins = pluginsStr.split(",");
@@ -116,13 +128,21 @@ public class AuditPartitioner implements Partitioner {
 
     @Override
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        String appId = key != null ? key.toString() : null;
+        if (dynamicPlanEnabled) {
+            int numPartitions = resolveTopicPartitionCount(cluster, topic);
+            if (appId == null || appId.isEmpty()) {
+                return Math.abs(System.identityHashCode(key) % numPartitions);
+            }
+            return partitionFromPlan(appId, numPartitions);
+        }
+
         int numPartitions = totalPartitions;
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
         if (partitions != null && !partitions.isEmpty()) {
             numPartitions = partitions.size();
         }
 
-        String appId = key != null ? key.toString() : null;
         if (appId == null || appId.isEmpty()) {
             return Math.abs(System.identityHashCode(key) % numPartitions);
         }
@@ -135,10 +155,8 @@ public class AuditPartitioner implements Partitioner {
                 end = start;
             }
             int rangeSize = end - start + 1;
-            int subPartition = appIdCounters
-                    .computeIfAbsent(appId, k -> new AtomicInteger(0))
-                    .getAndIncrement() % rangeSize;
-            return start + subPartition;
+            int roundRobinIndex = nextRoundRobinIndex(appId, rangeSize);
+            return start + roundRobinIndex;
         } else {
             // Unconfigured plugin - use buffer partitions
             int start = Math.min(bufferPartitionStart, numPartitions - 1);
@@ -154,6 +172,111 @@ public class AuditPartitioner implements Partitioner {
     @Override
     public void close() {
         appIdCounters.clear();
+    }
+
+    /** Picks a partition from the in-memory plan: round-robin for known plugins, hash for buffer. */
+    private int partitionFromPlan(String appId, int numPartitions) {
+        PartitionPlan plan = PartitionPlanHolder.getInstance().getPlan();
+        if (plan == null) {
+            LOG.error("Dynamic partition plan is not loaded; falling back to hash routing for appId '{}'", appId);
+            return hashAppIdToPartitionIndex(appId, numPartitions);
+        }
+        PluginPartitionAssignment assignment = findPluginAssignment(plan, appId);
+        if (assignment != null && !assignment.getPartitions().isEmpty()) {
+            List<Integer> partitionIds = assignment.getPartitions();
+            int roundRobinIndex = nextRoundRobinIndex(appId, partitionIds.size());
+            return boundPartitionToTopic(partitionIds.get(roundRobinIndex), numPartitions);
+        }
+        List<Integer> bufferIds = plan.getBuffer().getPartitions();
+        if (bufferIds.isEmpty()) {
+            return hashAppIdToPartitionIndex(appId, numPartitions);
+        }
+        int bufferIndex = hashAppIdToPartitionIndex(appId, bufferIds.size());
+        return boundPartitionToTopic(bufferIds.get(bufferIndex), numPartitions);
+    }
+
+    /** Sticky hash: maps {@code appId} to an index in {@code [0, partitionCount)}. */
+    private static int hashAppIdToPartitionIndex(String appId, int partitionCount) {
+        return Math.abs(appId.hashCode() % partitionCount);
+    }
+
+    /**
+     * Picks the next slot for round-robin routing for one plugin.
+     * Each {@code appId} keeps its own counter (0, 1, 2, …); {@code % laneCount} cycles through lanes.
+     */
+    private int nextRoundRobinIndex(String appId, int laneCount) {
+        AtomicInteger messageCounter = appIdCounters.computeIfAbsent(appId, k -> new AtomicInteger(0));
+        return messageCounter.getAndIncrement() % laneCount;
+    }
+
+    /** Looks up a plugin assignment using case-insensitive plugin id matching. */
+    private static PluginPartitionAssignment findPluginAssignment(PartitionPlan plan, String appId) {
+        for (Map.Entry<String, PluginPartitionAssignment> entry : plan.getPlugins().entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(appId)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    /** Returns the live partition count for the audit topic from the Kafka cluster metadata. */
+    private static int resolveTopicPartitionCount(Cluster cluster, String topic) {
+        List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+        if (partitions != null && !partitions.isEmpty()) {
+            return partitions.size();
+        }
+        return 1;
+    }
+
+    /** Bounds a planned partition id to the topic's current live partition range. */
+    private static int boundPartitionToTopic(int plannedPartitionId, int topicPartitionCount) {
+        if (topicPartitionCount <= 0) {
+            return 0;
+        }
+        return Math.min(Math.max(0, plannedPartitionId), topicPartitionCount - 1);
+    }
+
+    /** Logs the dynamic plan snapshot installed in {@link PartitionPlanHolder} at startup. */
+    private void logDynamicPlanConfiguration(Map<String, ?> configs, String propPrefix) {
+        int defaultPerPlugin = getIntConfig(configs, propPrefix + AuditServerConstants.PROP_TOPIC_PARTITIONS_PER_CONFIGURED_PLUGIN, AuditServerConstants.DEFAULT_PARTITIONS_PER_CONFIGURED_PLUGIN);
+        if (defaultPerPlugin < 1) {
+            defaultPerPlugin = 1;
+        }
+
+        PartitionPlan plan = PartitionPlanHolder.getInstance().getPlan();
+        AuditServerLogFormatter.LogBuilder logBuilder = AuditServerLogFormatter.builder("****** AuditPartitioner Configuration ******");
+        if (plan == null) {
+            logBuilder.add("Mode: ", "dynamic (plan not loaded yet)");
+            logBuilder.logInfo(LOG);
+            return;
+        }
+
+        logBuilder.add("Mode: ", "dynamic (PartitionPlanHolder)");
+        logBuilder.add("Plan version: ", plan.getVersion());
+        logBuilder.add("Total partitions: ", plan.getTopicPartitionCount());
+        logBuilder.add("Configured plugins: ", plan.getPlugins().size());
+        logBuilder.add("Default partitions per plugin: ", defaultPerPlugin);
+        for (Map.Entry<String, PluginPartitionAssignment> entry : plan.getPlugins().entrySet()) {
+            List<Integer> partitionIds = entry.getValue().getPartitions();
+            String rangeInfo = formatPartitionRangeInfo(partitionIds);
+            logBuilder.add("Plugin '" + entry.getKey() + "'", rangeInfo);
+        }
+        logBuilder.add("Buffer partitions (unconfigured): ", formatBufferPartitionInfo(plan.getBuffer().getPartitions()));
+        logBuilder.logInfo(LOG);
+    }
+
+    private static String formatPartitionRangeInfo(List<Integer> partitionIds) {
+        if (partitionIds.isEmpty()) {
+            return "0 partitions (range: n/a): ";
+        }
+        return String.format("%d partitions (range: %d-%d): ", partitionIds.size(), partitionIds.get(0), partitionIds.get(partitionIds.size() - 1));
+    }
+
+    private static String formatBufferPartitionInfo(List<Integer> bufferPartitionIds) {
+        if (bufferPartitionIds.isEmpty()) {
+            return "0 partitions (range: n/a)";
+        }
+        return String.format("%d partitions (range: %d-%d)", bufferPartitionIds.size(), bufferPartitionIds.get(0), bufferPartitionIds.get(bufferPartitionIds.size() - 1));
     }
 
     private int indexOfConfiguredPlugin(String appId) {

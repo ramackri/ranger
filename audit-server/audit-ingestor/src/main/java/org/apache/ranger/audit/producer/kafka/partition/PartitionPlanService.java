@@ -1,0 +1,176 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.ranger.audit.producer.kafka.partition;
+
+import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanConflictException;
+import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
+import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
+import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplaceRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.PromotePluginRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.ScalePluginRequest;
+import org.apache.ranger.audit.provider.MiscUtil;
+import org.apache.ranger.audit.server.AuditServerConfig;
+import org.apache.ranger.audit.server.AuditServerConstants;
+import org.springframework.stereotype.Component;
+
+import java.util.Properties;
+
+/** REST mutations and reads for the dynamic Kafka partition plan. */
+@Component
+public class PartitionPlanService {
+    static final String INGESTOR_PROP_PREFIX = "ranger.audit.ingestor";
+
+    private final Properties configProps;
+    private final PartitionPlanHolder holder;
+    private final PartitionPlanRegistryFactory registryFactory;
+    private final KafkaAuditTopicPartitionGrower auditTopicPartitionGrower;
+
+    public PartitionPlanService() {
+        this(AuditServerConfig.getInstance().getProperties(), PartitionPlanHolder.getInstance(), new PartitionPlanRegistryFactory(), new KafkaAuditTopicPartitionGrower());
+    }
+
+    PartitionPlanService(Properties configProps, PartitionPlanHolder holder, PartitionPlanRegistryFactory registryFactory, KafkaAuditTopicPartitionGrower auditTopicPartitionGrower) {
+        this.configProps               = configProps;
+        this.holder                    = holder;
+        this.registryFactory           = registryFactory;
+        this.auditTopicPartitionGrower = auditTopicPartitionGrower;
+    }
+
+    /** Returns whether dynamic partition-plan mode is enabled in ingestor configuration. */
+    public boolean isDynamicPartitionPlanEnabled() {
+        return PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(configProps, INGESTOR_PROP_PREFIX);
+    }
+
+    /** Returns the plan currently installed in memory on this ingestor pod. */
+    public PartitionPlan getPartitionPlan() {
+        PartitionPlan plan = holder.getPlan();
+        if (plan == null) {
+            throw new PartitionPlanException("Partition plan is not loaded in memory");
+        }
+        return plan;
+    }
+
+    /** Replaces the full plan via REST PUT with optimistic locking. */
+    public PartitionPlan replacePartitionPlan(PartitionPlanReplaceRequest request, String updatedBy) {
+        requireDynamicEnabled();
+        String auditTopic = resolveAuditTopicName();
+        try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
+            PartitionPlan current = requirePlan(registry, auditTopic);
+            PartitionPlan next = PartitionPlanAllocator.replacePlan(current, request.toProposedPlan(current, updatedBy));
+            return publishMutation(registry, auditTopic, request.getExpectedVersion(), current, next);
+        } catch (PartitionPlanException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PartitionPlanException("Failed to update partition plan for audit topic '" + auditTopic + "'", e);
+        }
+    }
+
+    /** Promotes a plugin from the buffer to dedicated partitions. */
+    public PartitionPlan promotePlugin(PromotePluginRequest request, String updatedBy) {
+        requireDynamicEnabled();
+        String auditTopic = resolveAuditTopicName();
+        try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
+            PartitionPlan current = requirePlan(registry, auditTopic);
+            PartitionPlan next = PartitionPlanAllocator.promotePlugin(current, request.getPluginId(), request.getPartitionCount(), updatedBy);
+            return publishMutation(registry, auditTopic, request.getExpectedVersion(), current, next);
+        } catch (PartitionPlanException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PartitionPlanException("Failed to update partition plan for audit topic '" + auditTopic + "'", e);
+        }
+    }
+
+    /** Appends tail partitions to a plugin already present in the plan. */
+    public PartitionPlan scalePlugin(ScalePluginRequest request, String updatedBy) {
+        requireDynamicEnabled();
+        String auditTopic = resolveAuditTopicName();
+        try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
+            PartitionPlan current = requirePlan(registry, auditTopic);
+            PartitionPlan next = PartitionPlanAllocator.scalePlugin(current, request.getPluginId(), request.getAdditionalPartitions(), updatedBy);
+            return publishMutation(registry, auditTopic, request.getExpectedVersion(), current, next);
+        } catch (PartitionPlanException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PartitionPlanException("Failed to update partition plan for audit topic '" + auditTopic + "'", e);
+        }
+    }
+
+    /** Validates version, grows the audit topic if needed, writes the plan, and reloads memory. */
+    private PartitionPlan publishMutation(PartitionPlanRegistry registry, String auditTopic, int expectedVersion, PartitionPlan current, PartitionPlan next) {
+        if (current.getVersion() != expectedVersion) {
+            throw new PartitionPlanConflictException(current);
+        }
+        growAuditTopicIfNeeded(next.getTopicPartitionCount());
+        verifyVersionUnchanged(registry, expectedVersion);
+        registry.writePlan(auditTopic, next);
+        verifyReadback(registry, auditTopic, next.getVersion());
+        return holder.getPlan();
+    }
+
+    /** Grows the audit topic before the plan references new partition IDs. */
+    private void growAuditTopicIfNeeded(int requiredPartitions) {
+        try {
+            auditTopicPartitionGrower.growAuditTopicToRequiredPartitionCount(configProps, INGESTOR_PROP_PREFIX, resolveAuditTopicName(), requiredPartitions);
+        } catch (RuntimeException e) {
+            throw new PartitionPlanException("Failed to grow audit topic partition count", e);
+        }
+    }
+
+    /** Confirms the registry still holds the expected version before writing. */
+    private void verifyVersionUnchanged(PartitionPlanRegistry registry, int expectedVersion) {
+        PartitionPlan latest = registry.readPlan(resolveAuditTopicName());
+        if (latest == null) {
+            throw new PartitionPlanException("Partition plan disappeared during update");
+        }
+        if (latest.getVersion() != expectedVersion) {
+            throw new PartitionPlanConflictException(latest);
+        }
+    }
+
+    /** Mandatory read-back after publish so every pod converges on the same plan version. */
+    private void verifyReadback(PartitionPlanRegistry registry, String auditTopic, int expectedVersion) {
+        PartitionPlan readback = registry.readPlan(auditTopic);
+        if (readback == null || readback.getVersion() != expectedVersion) {
+            throw new PartitionPlanConflictException(readback != null ? readback : holder.getPlan());
+        }
+        holder.install(readback, readback.getTopicPartitionCount());
+    }
+
+    /** Loads the current plan from Kafka or fails when the registry is empty. */
+    private static PartitionPlan requirePlan(PartitionPlanRegistry registry, String auditTopic) {
+        PartitionPlan plan = registry.readPlan(auditTopic);
+        if (plan == null) {
+            throw new PartitionPlanException("No partition plan found in Kafka for audit topic '" + auditTopic + "'");
+        }
+        return plan;
+    }
+
+    /** Rejects REST calls when dynamic mode is disabled. */
+    private void requireDynamicEnabled() {
+        if (!isDynamicPartitionPlanEnabled()) {
+            throw new PartitionPlanException("Dynamic partition plan is not enabled");
+        }
+    }
+
+    /** Resolves the audit data topic name from ingestor configuration. */
+    private String resolveAuditTopicName() {
+        return MiscUtil.getStringProperty(configProps, INGESTOR_PROP_PREFIX + "." + AuditServerConstants.PROP_TOPIC_NAME, AuditServerConstants.DEFAULT_TOPIC);
+    }
+}

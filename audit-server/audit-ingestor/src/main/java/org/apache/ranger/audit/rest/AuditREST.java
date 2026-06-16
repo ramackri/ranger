@@ -23,6 +23,13 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.security.authentication.util.KerberosName;
 import org.apache.ranger.audit.model.AuthzAuditEvent;
 import org.apache.ranger.audit.producer.AuditDestinationMgr;
+import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanService;
+import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanConflictException;
+import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
+import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
+import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplaceRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.PromotePluginRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.ScalePluginRequest;
 import org.apache.ranger.audit.provider.MiscUtil;
 import org.apache.ranger.audit.server.AuditServerConfig;
 import org.apache.ranger.audit.server.AuditServerConstants;
@@ -36,6 +43,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
+import javax.ws.rs.PUT;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
@@ -67,6 +75,9 @@ public class AuditREST {
 
     @Autowired
     AuditDestinationMgr auditDestinationMgr;
+
+    @Autowired
+    PartitionPlanService partitionPlanService;
 
     /**
      * Health check endpoint
@@ -147,7 +158,7 @@ public class AuditREST {
     }
 
     /**
-     *  Access Audits producer endpoint.
+     * Access Audits producer endpoint.
      *  @param serviceName Required query parameter to identify the source service (hdfs, hive, kafka, solr, etc.)
      *  @param appId Optional query parameter for batch processing - identifies the application instance
      *  @param accessAudits List of audit events to process
@@ -238,6 +249,155 @@ public class AuditREST {
         LOG.debug("<== AuditREST.accessAudit(): HttpStatus {} for serviceName: {}, user: {}", ret.getStatus(), serviceName, authenticatedUser);
 
         return ret;
+    }
+
+    /** Returns the in-memory partition plan when dynamic mode is enabled. */
+    @GET
+    @Path("/partition-plan")
+    @Produces("application/json")
+    public Response getPartitionPlan() {
+        LOG.debug("==> AuditREST.getPartitionPlan()");
+        Response ret;
+        if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
+            ret = partitionPlanDisabled("GET /partition-plan");
+        } else {
+            try {
+                ret = Response.ok(partitionPlanService.getPartitionPlan().toJson()).build();
+            } catch (PartitionPlanException e) {
+                LOG.error("Partition plan GET failed", e);
+                ret = Response.status(Response.Status.SERVICE_UNAVAILABLE).entity(buildErrorResponse(e.getMessage())).build();
+            }
+        }
+        LOG.debug("<== AuditREST.getPartitionPlan(): status={}", ret.getStatus());
+        return ret;
+    }
+
+    /** Replaces the full plan (optimistic lock via expectedVersion). */
+    @PUT
+    @Path("/partition-plan")
+    @Consumes("application/json")
+    @Produces("application/json")
+    public Response putPartitionPlan(PartitionPlanReplaceRequest request, @Context HttpServletRequest httpRequest) {
+        LOG.debug("==> AuditREST.putPartitionPlan()");
+        Response ret;
+        if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
+            ret = partitionPlanDisabled("PUT /partition-plan");
+        } else {
+            try {
+                ret = toSuccessfulPartitionPlanResponse(partitionPlanService.replacePartitionPlan(request, resolveUpdatedBy(httpRequest)));
+            } catch (PartitionPlanConflictException e) {
+                ret = toPartitionPlanConflictResponse("PUT /partition-plan", e);
+            } catch (PartitionPlanException e) {
+                ret = toPartitionPlanErrorResponse("PUT /partition-plan", e);
+            } catch (Exception e) {
+                LOG.error("Unexpected error replacing partition plan", e);
+                ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to replace partition plan")).build();
+            }
+        }
+        LOG.debug("<== AuditREST.putPartitionPlan(): status={}", ret.getStatus());
+        return ret;
+    }
+
+    /** Moves a plugin from the buffer to dedicated partitions. */
+    @POST
+    @Path("/partition-plan/promote")
+    @Consumes("application/json")
+    @Produces("application/json")
+    public Response promotePlugin(PromotePluginRequest request, @Context HttpServletRequest httpRequest) {
+        LOG.debug("==> AuditREST.promotePlugin(pluginId={})", request != null ? request.getPluginId() : null);
+        Response ret;
+        if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
+            ret = partitionPlanDisabled("POST /partition-plan/promote");
+        } else {
+            try {
+                ret = toSuccessfulPartitionPlanResponse(partitionPlanService.promotePlugin(request, resolveUpdatedBy(httpRequest)));
+            } catch (PartitionPlanConflictException e) {
+                ret = toPartitionPlanConflictResponse("POST /partition-plan/promote", e);
+            } catch (PartitionPlanException e) {
+                ret = toPartitionPlanErrorResponse("POST /partition-plan/promote", e);
+            } catch (Exception e) {
+                LOG.error("Unexpected error promoting plugin in partition plan", e);
+                ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to promote plugin in partition plan")).build();
+            }
+        }
+        LOG.debug("<== AuditREST.promotePlugin(): status={}", ret.getStatus());
+        return ret;
+    }
+
+    /** Appends tail partitions to an existing plugin. */
+    @POST
+    @Path("/partition-plan/scale")
+    @Consumes("application/json")
+    @Produces("application/json")
+    public Response scalePlugin(ScalePluginRequest request, @Context HttpServletRequest httpRequest) {
+        LOG.debug("==> AuditREST.scalePlugin(pluginId={})", request != null ? request.getPluginId() : null);
+        Response ret;
+        if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
+            ret = partitionPlanDisabled("POST /partition-plan/scale");
+        } else {
+            try {
+                ret = toSuccessfulPartitionPlanResponse(partitionPlanService.scalePlugin(request, resolveUpdatedBy(httpRequest)));
+            } catch (PartitionPlanConflictException e) {
+                ret = toPartitionPlanConflictResponse("POST /partition-plan/scale", e);
+            } catch (PartitionPlanException e) {
+                ret = toPartitionPlanErrorResponse("POST /partition-plan/scale", e);
+            } catch (Exception e) {
+                LOG.error("Unexpected error scaling plugin in partition plan", e);
+                ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to scale plugin in partition plan")).build();
+            }
+        }
+        LOG.debug("<== AuditREST.scalePlugin(): status={}", ret.getStatus());
+        return ret;
+    }
+
+    /** Returns HTTP 200 with the updated plan JSON body. */
+    private Response toSuccessfulPartitionPlanResponse(PartitionPlan updatedPlan) {
+        return Response.ok(updatedPlan.toJson()).build();
+    }
+
+    /** Returns HTTP 409 with the current plan when optimistic locking fails. */
+    private Response toPartitionPlanConflictResponse(String operation, PartitionPlanConflictException conflict) {
+        PartitionPlan currentPlan = conflict.getCurrentPlan();
+        if (currentPlan == null) {
+            LOG.error("{} rejected: partition plan version conflict (current plan unavailable)", operation, conflict);
+            return Response.status(Response.Status.CONFLICT).entity(buildErrorResponse("Partition plan version conflict")).build();
+        }
+        LOG.error("{} rejected: partition plan version conflict; current version is {}", operation, currentPlan.getVersion(), conflict);
+        return Response.status(Response.Status.CONFLICT).entity(currentPlan.toJson()).build();
+    }
+
+    /** Returns HTTP 400 or 503 for validation and Kafka admin failures. */
+    private Response toPartitionPlanErrorResponse(String operation, PartitionPlanException error) {
+        Response.Status status = resolvePartitionPlanErrorStatus(error);
+        LOG.error("{} failed: {}", operation, error.getMessage(), error);
+        return Response.status(status).entity(buildErrorResponse(error.getMessage())).build();
+    }
+
+    /** Returns HTTP 503 when dynamic partition-plan mode is disabled. */
+    private Response partitionPlanDisabled(String operation) {
+        LOG.error("{} rejected: dynamic partition plan is not enabled", operation);
+        return Response.status(Response.Status.SERVICE_UNAVAILABLE).entity(buildErrorResponse("Dynamic partition plan is not enabled")).build();
+    }
+
+    /** Maps service/infrastructure failures to 503; client validation mistakes to 400. */
+    private static Response.Status resolvePartitionPlanErrorStatus(PartitionPlanException error) {
+        if (error.getCause() != null) {
+            return Response.Status.SERVICE_UNAVAILABLE;
+        }
+        String message = error.getMessage();
+        if (message != null && (message.contains("Partition plan is not loaded in memory")
+                || message.contains("Partition plan disappeared during update")
+                || message.contains("No partition plan found in Kafka")
+                || message.contains("Mandatory read-back failed"))) {
+            return Response.Status.SERVICE_UNAVAILABLE;
+        }
+        return Response.Status.BAD_REQUEST;
+    }
+
+    /** Records the authenticated admin user on plan mutations. */
+    private String resolveUpdatedBy(HttpServletRequest request) {
+        String user = getAuthenticatedUser(request);
+        return StringUtils.isNotBlank(user) ? user : "rest-api";
     }
 
     private String buildResponse(Map<String, Object> respMap) {

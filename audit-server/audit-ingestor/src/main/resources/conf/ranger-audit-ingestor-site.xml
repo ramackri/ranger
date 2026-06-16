@@ -240,6 +240,7 @@
         <name>ranger.audit.ingestor.service.dev_solr.allowed.users</name>
         <value>solr</value>
         <description>Allowed users for dev_solr (Solr plugin)</description>
+
     </property>
 
     <!-- AUTH_TO_LOCAL RULES FOR KERBEROS PRINCIPAL MAPPING -->
@@ -249,6 +250,21 @@
                RULE:[2:$1/$2@$0]([ndj]n/.*@.*|hdfs/.*@.*)s/.*/hdfs/
                RULE:[2:$1/$2@$0]([rn]m/.*@.*|yarn/.*@.*)s/.*/yarn/
                RULE:[2:$1/$2@$0](jhs/.*@.*)s/.*/mapred/
+               RULE:[2:$1/$2@$0](hive/.*@.*)s/.*/hive/
+               RULE:[2:$1/$2@$0](hbase/.*@.*)s/.*/hbase/
+               RULE:[2:$1/$2@$0](kafka/.*@.*)s/.*/kafka/
+               RULE:[2:$1/$2@$0](knox/.*@.*)s/.*/knox/
+               RULE:[2:$1/$2@$0](rangerkms/.*@.*)s/.*/rangerkms/
+               RULE:[2:$1/$2@$0](trino/.*@.*)s/.*/trino/
+               RULE:[2:$1/$2@$0](ozone/.*@.*)s/.*/ozone/
+               RULE:[2:$1/$2@$0](om/.*@.*)s/.*/om/
+               RULE:[2:$1/$2@$0](scm/.*@.*)s/.*/scm/
+               RULE:[2:$1/$2@$0](dn/.*@.*)s/.*/dn/
+               RULE:[2:$1/$2@$0](solr/.*@.*)s/.*/solr/
+               RULE:[2:$1/$2@$0](rangertagsync/.*@.*)s/.*/rangertagsync/
+               RULE:[2:$1/$2@$0](atlas/.*@.*)s/.*/atlas/
+               RULE:[2:$1/$2@$0](kudu/.*@.*)s/.*/kudu/
+               RULE:[2:$1/$2@$0](nifi/.*@.*)s/.*/nifi/
                RULE:[1:$1@$0](.*@.*)s/@.*//
                DEFAULT
         </value>
@@ -265,6 +281,21 @@
             - RULE:[2:$1/$2@$0]([ndj]n/.*@.*|hdfs/.*@.*)s/.*/hdfs/     # nn,dn,jn,hdfs/* -> hdfs (dev_hdfs)
             - RULE:[2:$1/$2@$0]([rn]m/.*@.*|yarn/.*@.*)s/.*/yarn/      # rm,nm,yarn/* -> yarn (dev_yarn)
             - RULE:[2:$1/$2@$0](jhs/.*@.*)s/.*/mapred/                 # jhs/* -> mapred
+            - RULE:[2:$1/$2@$0](hive/.*@.*)s/.*/hive/                  # hive/* -> hive (dev_hive)
+            - RULE:[2:$1/$2@$0](hbase/.*@.*)s/.*/hbase/                # hbase/* -> hbase (dev_hbase)
+            - RULE:[2:$1/$2@$0](kafka/.*@.*)s/.*/kafka/                # kafka/* -> kafka (dev_kafka)
+            - RULE:[2:$1/$2@$0](knox/.*@.*)s/.*/knox/                  # knox/* -> knox (dev_knox)
+            - RULE:[2:$1/$2@$0](rangerkms/.*@.*)s/.*/rangerkms/        # rangerkms/* -> rangerkms (dev_kms)
+            - RULE:[2:$1/$2@$0](trino/.*@.*)s/.*/trino/                # trino/* -> trino (dev_trino)
+            - RULE:[2:$1/$2@$0](ozone/.*@.*)s/.*/ozone/                # ozone/* -> ozone (dev_ozone)
+            - RULE:[2:$1/$2@$0](om/.*@.*)s/.*/om/                      # om/* -> om (dev_ozone)
+            - RULE:[2:$1/$2@$0](scm/.*@.*)s/.*/scm/                    # scm/* -> scm (dev_ozone)
+            - RULE:[2:$1/$2@$0](dn/.*@.*)s/.*/dn/                      # dn/* -> dn (dev_ozone)
+            - RULE:[2:$1/$2@$0](solr/.*@.*)s/.*/solr/                  # solr/* -> solr (dev_solr)
+            - RULE:[2:$1/$2@$0](rangertagsync/.*@.*)s/.*/rangertagsync/  # rangertagsync/* -> rangertagsync (dev_tag)
+            - RULE:[2:$1/$2@$0](atlas/.*@.*)s/.*/atlas/                # atlas/* -> atlas (dev_atlas)
+            - RULE:[2:$1/$2@$0](kudu/.*@.*)s/.*/kudu/                  # kudu/* -> kudu (dev_kudu)
+            - RULE:[2:$1/$2@$0](nifi/.*@.*)s/.*/nifi/                  # nifi/* -> nifi (dev_nifi)
             - RULE:[1:$1@$0](.*@.*)s/@.*//                             # user@REALM -> user
             - DEFAULT
         ]]></description>
@@ -400,6 +431,36 @@
             Must not exceed the number of available Kafka brokers.
         </description>
     </property>
+
+    <!--
+      Dynamic partition plan (Kafka compacted registry). Shipped disabled — legacy XML routing is the default.
+      When dynamic.enabled=true: runtime routing changes via REST only (not XML edits).
+    -->
+    <property>
+        <name>ranger.audit.ingestor.kafka.partition.plan.dynamic.enabled</name>
+        <value>false</value>
+        <description>
+            false or absent = legacy XML AuditPartitioner at startup (today's behavior).
+            true = Kafka registry + REST + PartitionPlanWatcher.
+        </description>
+    </property>
+    <!-- Optional when dynamic.enabled=true (defaults: topic=ranger_audit_partition_plan, refresh=30000 ms, consumer poll=500 ms):
+    <property>
+        <name>ranger.audit.ingestor.kafka.partition.plan.topic</name>
+        <value>ranger_audit_partition_plan</value>
+        <description>Compacted topic storing PartitionPlan JSON. Default ranger_audit_partition_plan if unset.</description>
+    </property>
+    <property>
+        <name>ranger.audit.ingestor.kafka.partition.plan.refresh.interval.ms</name>
+        <value>30000</value>
+        <description>Background watcher sleep between plan refresh cycles (milliseconds).</description>
+    </property>
+    <property>
+        <name>ranger.audit.ingestor.kafka.partition.plan.consumer.poll.timeout.ms</name>
+        <value>500</value>
+        <description>Kafka consumer poll timeout when draining the compacted plan topic (milliseconds). Default 500.</description>
+    </property>
+    -->
 
     <property>
         <name>ranger.audit.ingestor.kafka.security.protocol</name>
