@@ -21,8 +21,10 @@ package org.apache.ranger.audit.producer.kafka.partition;
 
 import org.apache.ranger.audit.server.AuditServerConstants;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /** Inputs for building the first partition plan from legacy ingestor XML / producer config. */
@@ -31,24 +33,26 @@ public final class PartitionPlanBootstrapConfig {
     private final String[] configuredPlugins;
     private final int defaultPartitionsPerPlugin;
     private final int bufferPartitionCount;
+    private final int hashBasedTopicPartitionCount;
     private final Map<String, Integer> pluginPartitionOverrides;
 
-    public PartitionPlanBootstrapConfig(String auditTopic, String[] configuredPlugins, int defaultPartitionsPerPlugin, int bufferPartitionCount, Map<String, Integer> pluginPartitionOverrides) {
+    public PartitionPlanBootstrapConfig(String auditTopic, String[] configuredPlugins, int defaultPartitionsPerPlugin, int bufferPartitionCount, int hashBasedTopicPartitionCount, Map<String, Integer> pluginPartitionOverrides) {
         this.auditTopic                 = auditTopic;
         this.configuredPlugins          = configuredPlugins != null ? configuredPlugins : new String[0];
         this.defaultPartitionsPerPlugin = defaultPartitionsPerPlugin;
         this.bufferPartitionCount       = bufferPartitionCount;
+        this.hashBasedTopicPartitionCount = Math.max(1, hashBasedTopicPartitionCount);
         this.pluginPartitionOverrides   = pluginPartitionOverrides != null ? new LinkedHashMap<>(pluginPartitionOverrides) : Collections.emptyMap();
     }
 
     public static PartitionPlanBootstrapConfig create(String auditTopic, String[] configuredPlugins, int defaultPartitionsPerPlugin, int bufferPartitionCount) {
-        return new PartitionPlanBootstrapConfig(auditTopic, configuredPlugins, defaultPartitionsPerPlugin, bufferPartitionCount, Collections.emptyMap());
+        return new PartitionPlanBootstrapConfig(auditTopic, configuredPlugins, defaultPartitionsPerPlugin, bufferPartitionCount, AuditServerConstants.DEFAULT_TOPIC_PARTITIONS, Collections.emptyMap());
     }
 
     public PartitionPlanBootstrapConfig withPluginOverride(String pluginId, int partitionCount) {
         Map<String, Integer> overrides = new LinkedHashMap<>(pluginPartitionOverrides);
         overrides.put(pluginId, partitionCount);
-        return new PartitionPlanBootstrapConfig(auditTopic, configuredPlugins, defaultPartitionsPerPlugin, bufferPartitionCount, overrides);
+        return new PartitionPlanBootstrapConfig(auditTopic, configuredPlugins, defaultPartitionsPerPlugin, bufferPartitionCount, hashBasedTopicPartitionCount, overrides);
     }
 
     public String getAuditTopic() {
@@ -67,6 +71,11 @@ public final class PartitionPlanBootstrapConfig {
         return bufferPartitionCount;
     }
 
+    /** Used when {@link #getConfiguredPlugins()} is empty: matches {@code kafka.topic.partitions} / hash-based mode. */
+    public int getHashBasedTopicPartitionCount() {
+        return hashBasedTopicPartitionCount;
+    }
+
     public int getPartitionsForPlugin(String pluginId) {
         Integer override = pluginPartitionOverrides.get(pluginId);
         int count = override != null ? override : defaultPartitionsPerPlugin;
@@ -76,11 +85,12 @@ public final class PartitionPlanBootstrapConfig {
     public static PartitionPlanBootstrapConfig fromProducerConfigMap(Map<String, ?> configs, String auditTopic) {
         String propPrefix = AuditServerConstants.PROP_PREFIX_AUDIT_SERVER;
         String pluginsStr = getString(configs, propPrefix + AuditServerConstants.PROP_CONFIGURED_PLUGINS, AuditServerConstants.DEFAULT_CONFIGURED_PLUGINS);
-        String[] plugins = trimPlugins(pluginsStr.split(","));
+        String[] plugins = parsePluginIds(pluginsStr);
         int defaultPerPlugin = getInt(configs, propPrefix + AuditServerConstants.PROP_TOPIC_PARTITIONS_PER_CONFIGURED_PLUGIN, AuditServerConstants.DEFAULT_PARTITIONS_PER_CONFIGURED_PLUGIN);
         int bufferCount = getInt(configs, propPrefix + AuditServerConstants.PROP_BUFFER_PARTITIONS, AuditServerConstants.DEFAULT_BUFFER_PARTITIONS);
+        int hashBasedTopicPartitions = getInt(configs, propPrefix + AuditServerConstants.PROP_TOPIC_PARTITIONS, AuditServerConstants.DEFAULT_TOPIC_PARTITIONS);
 
-        PartitionPlanBootstrapConfig config = create(auditTopic, plugins, defaultPerPlugin, bufferCount);
+        PartitionPlanBootstrapConfig config = new PartitionPlanBootstrapConfig(auditTopic, plugins, defaultPerPlugin, bufferCount, hashBasedTopicPartitions, Collections.emptyMap());
         for (String plugin : plugins) {
             String overrideKey = propPrefix + AuditServerConstants.PROP_PLUGIN_PARTITION_OVERRIDE_PREFIX + plugin;
             if (configs.containsKey(overrideKey)) {
@@ -90,12 +100,17 @@ public final class PartitionPlanBootstrapConfig {
         return config;
     }
 
-    private static String[] trimPlugins(String[] plugins) {
-        String[] trimmed = new String[plugins.length];
-        for (int i = 0; i < plugins.length; i++) {
-            trimmed[i] = plugins[i].trim();
+    private static String[] parsePluginIds(String pluginsStr) {
+        if (pluginsStr == null || pluginsStr.isBlank()) {
+            return new String[0];
         }
-        return trimmed;
+        List<String> plugins = new ArrayList<>();
+        for (String plugin : pluginsStr.split(",")) {
+            if (plugin != null && !plugin.isBlank()) {
+                plugins.add(plugin.trim());
+            }
+        }
+        return plugins.toArray(new String[0]);
     }
 
     private static String getString(Map<String, ?> configs, String key, String defaultValue) {

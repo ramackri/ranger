@@ -55,7 +55,12 @@ public final class PartitionPlanBootstrap {
             nextPartition += count;
         }
 
-        int topicPartitionCount = nextPartition + Math.max(1, config.getBufferPartitionCount());
+        int topicPartitionCount;
+        if (nextPartition == 0) {
+            topicPartitionCount = config.getHashBasedTopicPartitionCount();
+        } else {
+            topicPartitionCount = nextPartition + Math.max(1, config.getBufferPartitionCount());
+        }
         PartitionPlan plan = PartitionPlan.builder()
                 .topic(config.getAuditTopic())
                 .version(PartitionPlanConstants.INITIAL_PLAN_VERSION)

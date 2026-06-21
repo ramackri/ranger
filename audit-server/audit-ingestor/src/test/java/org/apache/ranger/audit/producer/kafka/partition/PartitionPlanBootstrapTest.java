@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
@@ -54,6 +55,16 @@ public class PartitionPlanBootstrapTest {
         assertIterableEquals(List.of(0, 1, 2, 3, 4), plan.getPlugins().get("hdfs").getPartitions());
         assertIterableEquals(List.of(5, 6, 7), plan.getPlugins().get("trino").getPartitions());
         assertIterableEquals(List.of(8, 9, 10, 11), plan.getBuffer().getPartitions());
+    }
+
+    @Test
+    public void testCreateInitialPlanEmptyPluginsUsesHashBasedTopicPartitions() {
+        PartitionPlan plan = PartitionPlanBootstrap.createInitialPlan(
+                new PartitionPlanBootstrapConfig(TOPIC, new String[0], 3, 9, 10, Collections.emptyMap()));
+
+        assertEquals(10, plan.getTopicPartitionCount());
+        assertEquals(0, plan.getPlugins().size());
+        assertIterableEquals(List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9), plan.getBuffer().getPartitions());
     }
 
     @Test

@@ -96,7 +96,7 @@ topic partitions = Σ (partitions per plugin in configured.plugins) + buffer par
 
 `ranger.audit.ingestor.kafka.topic.partitions` (default **10** in XML) is used for **hash-based mode only**. In plugin-based mode, topic create/update uses the sum formula above, not `10`.
 
-**Shipped sample XML** lists many plugins in `configured.plugins` (hdfs, yarn, knox, hiveServer2, …). With defaults that yields a **large** topic (e.g. 13 plugins × 3 + 9 buffer = **48**). For a minimal deployment, shorten `configured.plugins` to only plugins you actually use.
+**Default site XML** leaves `configured.plugins` **empty** (hash-based static mode; dynamic greenfield bootstraps a **buffer-only** plan using `kafka.topic.partitions`). To pre-assign dedicated ranges at bootstrap, set an explicit comma-separated list (example plugin IDs: hdfs, yarn, knox, hiveServer2, hiveMetastore, kafka, hbaseRegional, hbaseMaster, solr, trino, ozone, kudu, nifi). A full 13-plugin layout yields a large topic (e.g. 13 × 3 + 9 buffer = **48** partitions).
 
 ### Hash-based mode (`configured.plugins` empty)
 

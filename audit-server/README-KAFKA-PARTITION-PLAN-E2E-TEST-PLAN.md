@@ -209,8 +209,9 @@ Unit tests → Tier 3 up → static-only script → enable dynamic → dynamic s
 
 | Layout | `configured.plugins` | Buffer | Total partitions |
 |--------|---------------------|--------|------------------|
+| **L0 empty (site XML default)** | *(empty)* | N/A — dynamic bootstrap uses all of `kafka.topic.partitions` as buffer | **`kafka.topic.partitions`** (default **10**) |
 | L1 minimal | `hdfs` | 3 | 6 |
-| L2 standard (site XML default) | `hdfs,yarn,knox,hiveServer2,hiveMetastore,kafka,hbaseRegional,hbaseMaster,solr,trino,ozone,kudu,nifi` (13 plugins) | 9 | **48** (13×3+9) |
+| L2 full lab / brownfield | `hdfs,yarn,knox,hiveServer2,hiveMetastore,kafka,hbaseRegional,hbaseMaster,solr,trino,ozone,kudu,nifi` (13 plugins) | 9 | **48** (13×3+9) |
 | L3 hot | + per-plugin overrides | 9 | varies |
 
-Shipped `ranger-audit-ingestor-site.xml` uses **L2** — do not shorten the plugin list for E2E. Automated promote uses a **buffer** plugin such as **`storm`** (not in `configured.plugins`).
+Greenfield E2E uses **L0** unless site XML is patched. Promote tests pick a buffer plugin such as **`storm`** (not in `configured.plugins`). For **L2** layout validation, set the 13-plugin list in site XML before enabling dynamic mode.

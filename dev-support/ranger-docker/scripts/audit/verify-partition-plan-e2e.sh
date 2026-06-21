@@ -120,11 +120,21 @@ run_dynamic_tests() {
   fi
 
   plan_plugins="$(printf '%s' "${HTTP_BODY}" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('plugins') or {}))" 2>/dev/null || echo "")"
-  expected_plugin_count="$(printf '%s' "${PP_CONFIGURED_PLUGINS}" | python3 -c "import sys; print(len([p for p in sys.stdin.read().split(',') if p.strip()]))")"
+  local configured_plugins
+  configured_plugins="$(pp_read_site_prop "${CONTAINER}" "ranger.audit.ingestor.kafka.configured.plugins")"
+  if [[ -n "${configured_plugins}" ]]; then
+    expected_plugin_count="$(printf '%s' "${configured_plugins}" | python3 -c "import sys; print(len([p for p in sys.stdin.read().split(',') if p.strip()]))")"
+  else
+    expected_plugin_count="0"
+  fi
   topic_count="$(pp_json_field "${HTTP_BODY}" topicPartitionCount)"
   kafka_parts="$(pp_kafka_topic_partition_count "${AUDIT_TOPIC}")"
   if [[ "${version}" == "1" && "${plan_plugins}" == "${expected_plugin_count}" ]]; then
-    pp_record_pass "greenfield plan lists ${plan_plugins} configured plugins (site XML layout)"
+    if [[ "${expected_plugin_count}" == "0" ]]; then
+      pp_record_pass "greenfield plan is buffer-only (configured.plugins empty in site XML)"
+    else
+      pp_record_pass "greenfield plan lists ${plan_plugins} configured plugins (site XML layout)"
+    fi
   elif [[ "${version}" != "1" ]]; then
     pp_record_pass "plan has ${plan_plugins} plugins at v${version}"
   else

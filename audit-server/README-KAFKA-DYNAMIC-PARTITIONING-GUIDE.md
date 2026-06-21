@@ -298,7 +298,7 @@ When dynamic mode starts and the plan registry is **empty**:
 
 1. Ingestor enables dynamic mode.
 2. Watcher finds no document in `ranger_audit_partition_plan`.
-3. Ingestor reads XML (`configured.plugins`, overrides, buffer, and `service.*.allowed.users`).
+3. Ingestor reads XML (`configured.plugins` if set, else buffer-only bootstrap from `kafka.topic.partitions`; overrides, buffer, and `service.*.allowed.users`).
 4. Ingestor builds and publishes the **first document** (`plugins` + `services`) to the compacted topic.
 5. Ingestor loads that document into memory and begins enforcing allowlist + routing.
 
@@ -634,7 +634,7 @@ No. The first plan is built from XML (same layout as static mode). Kafka is used
 Yes — recommended for brownfield clusters. Ingestor will read your pre-loaded plan and will not replace it with a fresh XML bootstrap.
 
 **Greenfield vs brownfield cutover — what is different?**  
-Greenfield: enable dynamic on an empty registry; first pod seeds from XML. Brownfield: export static layout, pre-seed the plan topic (or rely on bootstrap matching XML), then enable dynamic and verify every pod shows the same plan.
+Greenfield: enable dynamic on an empty registry; first pod seeds from XML (empty `configured.plugins` → buffer-only plan sized by `kafka.topic.partitions`). Brownfield: export static layout, pre-seed the plan topic (or set `configured.plugins` in XML to match production), then enable dynamic and verify every pod shows the same plan.
 
 **Does the `configured.plugins` XML list still matter in dynamic mode?**  
 Yes for **bootstrap only** when the registry is empty. After the first plan exists, runtime routing changes go through REST, not by editing that list.

@@ -120,9 +120,9 @@ public class AuditServerConstants {
     public static final long   DEFAULT_OFFSET_COMMIT_INTERVAL_MS             = 30000; // 30 seconds
     public static final int    DEFAULT_MAX_POLL_RECORDS                      = 500;   // Kafka default batch size
 
-    // Default configured plugins: each gets allocated partitions from the topic
+    // Empty by default: operators opt in via XML (static) or REST (dynamic). See ranger-audit-ingestor-site.xml.
     public static final String DEFAULT_PARTITIONER_CLASS                     = "org.apache.ranger.audit.producer.kafka.AuditPartitioner";
-    public static final String DEFAULT_CONFIGURED_PLUGINS                    = "hdfs,yarn,knox,hiveServer2,hiveMetastore,kafka,hbaseRegional,hbaseMaster,solr,trino,ozone,kudu,nifi";
+    public static final String DEFAULT_CONFIGURED_PLUGINS                    = "";
     public static final short  DEFAULT_REPLICATION_FACTOR                    = 3;
     public static final int    DEFAULT_TOPIC_PARTITIONS                      = 10;
     public static final int    DEFAULT_PARTITIONS_PER_CONFIGURED_PLUGIN      = 3;

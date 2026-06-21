@@ -38,7 +38,7 @@ SITE_XMLS=(
   "/opt/ranger/audit-ingestor/webapp/audit-ingestor/WEB-INF/classes/conf/ranger-audit-ingestor-site.xml"
 )
 
-# Must match ranger-audit-ingestor-site.xml (13 plugins × 3 + 9 buffer = 48 partitions).
+# Example plugin list for E2E promote tests when site XML leaves configured.plugins empty.
 PP_CONFIGURED_PLUGINS="hdfs,yarn,knox,hiveServer2,hiveMetastore,kafka,hbaseRegional,hbaseMaster,solr,trino,ozone,kudu,nifi"
 PP_BUFFER_PROMOTE_CANDIDATES=(storm ambari atlas impala sqoop kylin presto elasticsearch)
 PP_DEFAULT_PROMOTE_PLUGIN="storm"
