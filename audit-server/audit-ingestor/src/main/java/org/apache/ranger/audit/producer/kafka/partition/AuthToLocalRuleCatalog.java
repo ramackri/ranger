@@ -24,10 +24,8 @@ import org.apache.commons.lang3.StringUtils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -86,9 +84,8 @@ final class AuthToLocalRuleCatalog {
             return composeFull();
         }
 
-        List<String>       lines   = new ArrayList<>();
-        Set<String>        covered = new LinkedHashSet<>();
-        Map<String, String> catalogByShortName = catalogRulesByShortName();
+        List<String> lines   = new ArrayList<>();
+        Set<String>  covered = new LinkedHashSet<>();
 
         for (CatalogEntry entry : primaryRulesInOrder) {
             if (entry.targetShortName != null && active.contains(entry.targetShortName)) {
@@ -105,16 +102,6 @@ final class AuthToLocalRuleCatalog {
         lines.addAll(generated);
         lines.addAll(tailRules);
         return joinRules(lines);
-    }
-
-    private Map<String, String> catalogRulesByShortName() {
-        Map<String, String> ret = new LinkedHashMap<>();
-        for (CatalogEntry entry : primaryRulesInOrder) {
-            if (entry.targetShortName != null) {
-                ret.putIfAbsent(entry.targetShortName, entry.ruleLine);
-            }
-        }
-        return ret;
     }
 
     private static List<String> tokenizeRules(String rawRules) {

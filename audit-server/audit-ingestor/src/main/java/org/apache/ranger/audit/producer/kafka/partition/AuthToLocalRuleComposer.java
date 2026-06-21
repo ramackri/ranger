@@ -25,6 +25,7 @@ import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.ServiceAllowlistEntry;
 import org.apache.ranger.audit.server.AuditServerConfig;
 import org.apache.ranger.audit.server.AuditServerConstants;
+import org.apache.ranger.audit.utils.AuditMessageQueueUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +46,7 @@ public final class AuthToLocalRuleComposer {
     private volatile AuthToLocalRuleCatalog catalog;
     private volatile String                 lastAppliedRules;
     private volatile int                    lastAppliedPlanVersion;
+    private volatile Boolean                planTopicExistsOverrideForTests;
 
     private AuthToLocalRuleComposer() {
     }
@@ -74,6 +76,24 @@ public final class AuthToLocalRuleComposer {
     }
 
     /**
+     * Dynamic-mode startup: when the partition-plan Kafka topic does not exist yet, apply the full XML
+     * catalog so Kerberos mapping works before {@link PartitionPlanWatcher} bootstraps the registry.
+     * When the topic already exists, defer to composed rules on {@link PartitionPlanHolder#install}.
+     */
+    public void applyStartupRulesForDynamicMode(Properties props, String ingestorPropPrefix) {
+        if (!PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(props, ingestorPropPrefix)) {
+            return;
+        }
+        requireCatalog();
+        if (isPlanTopicPresent(props, ingestorPropPrefix)) {
+            LOG.info("Partition plan topic exists; auth_to_local rules will be composed from allowlisted short names on plan install");
+        } else {
+            applyStaticRules();
+            LOG.info("Partition plan topic does not exist yet; applied full auth_to_local catalog from XML until plan bootstrap");
+        }
+    }
+
+    /**
      * When dynamic partition-plan mode is enabled, compose rules from the union of allowlisted short
      * names and install them before audit REST authorization runs.
      */
@@ -87,24 +107,38 @@ public final class AuthToLocalRuleComposer {
         }
 
         AuthToLocalRuleCatalog loaded = requireCatalog();
-        Set<String>            active = unionAllowedUsers(plan);
-        String                 rules  = loaded.compose(active);
+        Set<String> activeShortNames = collectAllowedUserShortNames(plan);
+        String      rules            = loaded.compose(activeShortNames);
         applyRules(rules, plan.getVersion());
-        LOG.info("Applied composed auth_to_local rules for plan version {} ({} active short names)", plan.getVersion(), active.size());
+        LOG.info("Applied composed auth_to_local rules for plan version {} ({} active short names)", plan.getVersion(), activeShortNames.size());
     }
 
     /** Visible for tests — composes without applying Kerberos rules. */
-    String composeForActiveShortNames(Set<String> activeShortNames) {
+    String composeRulesForShortNames(Set<String> activeShortNames) {
         return requireCatalog().compose(activeShortNames);
     }
 
     /** Clears cached apply state between unit tests. */
     public synchronized void resetForTests() {
-        lastAppliedRules       = null;
-        lastAppliedPlanVersion = 0;
+        lastAppliedRules             = null;
+        lastAppliedPlanVersion       = 0;
+        planTopicExistsOverrideForTests = null;
     }
 
-    static Set<String> unionAllowedUsers(PartitionPlan plan) {
+    /** When non-null, overrides {@link AuditMessageQueueUtils#partitionPlanTopicExists} for unit tests. */
+    void setPlanTopicExistsOverrideForTests(Boolean exists) {
+        planTopicExistsOverrideForTests = exists;
+    }
+
+    private boolean isPlanTopicPresent(Properties props, String ingestorPropPrefix) {
+        Boolean override = planTopicExistsOverrideForTests;
+        if (override != null) {
+            return override;
+        }
+        return AuditMessageQueueUtils.partitionPlanTopicExists(props, ingestorPropPrefix);
+    }
+
+    static Set<String> collectAllowedUserShortNames(PartitionPlan plan) {
         Set<String> active = new LinkedHashSet<>();
         if (plan == null || plan.getServices() == null) {
             return active;

@@ -37,7 +37,7 @@ import java.util.Set;
 /** REST mutations and reads for the dynamic Kafka partition plan. */
 @Component
 public class PartitionPlanService {
-    static final String INGESTOR_PROP_PREFIX = "ranger.audit.ingestor";
+    public static final String INGESTOR_PROP_PREFIX = "ranger.audit.ingestor";
 
     private final Properties configProps;
     private final PartitionPlanHolder holder;

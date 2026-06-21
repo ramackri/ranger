@@ -536,8 +536,9 @@ public class AuditREST {
 
     /**
      * Loads the auth_to_local catalog from ranger-audit-ingestor-site.xml. When dynamic partition-plan
-     * mode is disabled, applies the full catalog immediately. When enabled, rules are composed from
-     * partition-plan allowlists on {@link PartitionPlanHolder#install(PartitionPlan, Integer)}.
+     * mode is disabled, applies the full catalog immediately. When enabled, applies static XML rules
+     * only if the partition-plan Kafka topic does not exist yet; otherwise composed rules are installed
+     * on {@link PartitionPlanHolder#install(PartitionPlan, Integer)} via {@link AuthToLocalRuleComposer#applyForPlan}.
      */
     private static void initializeAuthToLocal() {
         AuditServerConfig config = AuditServerConfig.getInstance();
@@ -550,8 +551,8 @@ public class AuditREST {
 
         AuthToLocalRuleComposer composer = AuthToLocalRuleComposer.getInstance();
         composer.initializeFromConfig();
-        if (PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(config.getProperties(), AuditServerConstants.PROP_PREFIX_AUDIT_SERVER.substring(0, AuditServerConstants.PROP_PREFIX_AUDIT_SERVER.length() - 1))) {
-            LOG.info("Dynamic partition plan enabled; auth_to_local rules will be composed from allowlisted short names on plan install");
+        if (PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(config.getProperties(), PartitionPlanService.INGESTOR_PROP_PREFIX)) {
+            composer.applyStartupRulesForDynamicMode(config.getProperties(), PartitionPlanService.INGESTOR_PROP_PREFIX);
         } else {
             composer.applyStaticRules();
             LOG.debug("Applied static auth_to_local catalog from site XML");

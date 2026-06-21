@@ -194,6 +194,38 @@ pp_dynamic_enabled() {
   docker exec "${container}" grep -A1 "${PROP_DYNAMIC}" "${path}" 2>/dev/null | grep -qi '<value>true</value>'
 }
 
+pp_patch_site_prop() {
+  local container="$1"
+  local site="$2"
+  local prop="$3"
+  local value="$4"
+  docker exec -u root "${container}" python3 - "${site}" "${prop}" "${value}" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+path, prop, value = sys.argv[1:4]
+root = ET.parse(path).getroot()
+found = False
+for p in root.findall("property"):
+    name = p.find("name")
+    if name is None or (name.text or "").strip() != prop:
+        continue
+    val = p.find("value")
+    if val is None:
+        val = ET.SubElement(p, "value")
+    val.text = value
+    found = True
+    break
+if not found:
+    prop_el = ET.SubElement(root, "property")
+    ET.SubElement(prop_el, "name").text = prop
+    ET.SubElement(prop_el, "value").text = value
+ET.indent(root, space="    ")
+tree = ET.ElementTree(root)
+tree.write(path, encoding="unicode", xml_declaration=False)
+PY
+}
+
 pp_set_dynamic_enabled() {
   local container="$1"
   local value="$2"
@@ -203,11 +235,7 @@ pp_set_dynamic_enabled() {
     if ! docker exec "${container}" test -f "${site}" 2>/dev/null; then
       continue
     fi
-    if docker exec "${container}" grep -q "${PROP_DYNAMIC}" "${site}" 2>/dev/null; then
-      docker exec "${container}" sed -i "/${PROP_DYNAMIC}/{n;s|<value>.*</value>|<value>${value}</value>|;}" "${site}"
-    else
-      docker exec "${container}" sed -i "s|</configuration>|    <property>\n        <name>${PROP_DYNAMIC}</name>\n        <value>${value}</value>\n    </property>\n</configuration>|" "${site}"
-    fi
+    pp_patch_site_prop "${container}" "${site}" "${PROP_DYNAMIC}" "${value}"
     changed=true
   done
   if [[ "${changed}" == "true" && "${restart}" == "true" ]]; then
@@ -241,7 +269,7 @@ pp_wait_watcher() {
     if [[ "${HTTP_CODE}" == "200" ]]; then
       return 0
     fi
-    if docker logs "${log_args[@]}" "${container}" 2>&1 | grep -q "Partition plan watcher ready"; then
+    if docker logs ${log_args+"${log_args[@]}"} "${container}" 2>&1 | grep -q "Partition plan watcher ready"; then
       return 0
     fi
     sleep 5

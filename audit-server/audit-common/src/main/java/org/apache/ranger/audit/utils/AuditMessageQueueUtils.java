@@ -177,6 +177,25 @@ public class AuditMessageQueueUtils {
         throw new RuntimeException("Failed to create partition plan topic '" + planTopic + "'");
     }
 
+    /**
+     * Returns whether the compacted partition-plan registry topic already exists on the audit Kafka cluster.
+     * When the check fails (broker unreachable, ACL denied), returns {@code false} so callers can fall back
+     * to static XML {@code auth_to_local} rules until the plan topic is available.
+     */
+    public static boolean partitionPlanTopicExists(Properties props, String propPrefix) {
+        String planTopic = MiscUtil.getStringProperty(props, propPrefix + "." + AuditServerConstants.PROP_PARTITION_PLAN_TOPIC, AuditServerConstants.DEFAULT_PARTITION_PLAN_TOPIC);
+        Map<String, Object> adminConfig = buildAdminClientConfig(props, propPrefix);
+        try (AdminClient admin = AdminClient.create(adminConfig)) {
+            Set<String> topicNames = admin.listTopics().names().get();
+            boolean exists = topicNames.contains(planTopic);
+            LOG.debug("Partition plan topic '{}' exists: {}", planTopic, exists);
+            return exists;
+        } catch (Exception ex) {
+            LOG.warn("Could not determine whether partition plan topic '{}' exists: {}. Assuming it does not.", planTopic, ex.getMessage());
+            return false;
+        }
+    }
+
     public static Map<String, Object> buildAdminClientConfig(Properties props, String propPrefix) {
         String bootstrapServers     = MiscUtil.getStringProperty(props, propPrefix + "." + AuditServerConstants.PROP_BOOTSTRAP_SERVERS);
         String securityProtocol     = MiscUtil.getStringProperty(props, propPrefix + "." + AuditServerConstants.PROP_SECURITY_PROTOCOL, AuditServerConstants.DEFAULT_SECURITY_PROTOCOL);

@@ -173,7 +173,7 @@ run_dynamic_tests() {
 
   echo "  Stale expectedVersion (409)..."
   pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/promote" \
-    "{\"pluginId\":\"${promote_plugin}\",\"partitionCount\":1,\"expectedVersion\":1}"
+    "{\"pluginId\":\"e2eStale409\",\"partitionCount\":2,\"expectedVersion\":1}"
   if [[ "${HTTP_CODE}" == "409" ]]; then
     pp_record_pass "stale expectedVersion -> 409"
   else

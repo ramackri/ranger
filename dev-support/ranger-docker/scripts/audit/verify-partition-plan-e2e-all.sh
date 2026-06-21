@@ -20,6 +20,7 @@
 #   ./scripts/audit/verify-partition-plan-e2e-all.sh
 #   ./scripts/audit/verify-partition-plan-e2e-all.sh --skip-kafka-down
 #   ./scripts/audit/verify-partition-plan-e2e-all.sh --with-audit-smoke
+#   ./scripts/audit/verify-partition-plan-e2e-all.sh --with-auth-access
 
 set -euo pipefail
 
@@ -27,12 +28,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${SCRIPT_DIR}"
 
 SKIP_KAFKA_DOWN=false
+WITH_AUTH_ACCESS=false
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-kafka-down) SKIP_KAFKA_DOWN=true; shift ;;
     --with-audit-smoke) EXTRA_ARGS+=(--with-audit-smoke); shift ;;
+    --with-auth-access) WITH_AUTH_ACCESS=true; shift ;;
     --timeout) EXTRA_ARGS+=(--timeout "${2:?}"); shift 2 ;;
     -h|--help)
       sed -n '19,23p' "$0"
@@ -48,7 +51,9 @@ done
 chmod +x scripts/audit/verify-partition-plan-e2e.sh \
   scripts/audit/verify-partition-plan-multipod-e2e.sh \
   scripts/audit/verify-partition-plan-brownfield-e2e.sh \
-  scripts/audit/verify-partition-plan-kafka-down-e2e.sh 2>/dev/null || true
+  scripts/audit/verify-partition-plan-kafka-down-e2e.sh \
+  scripts/audit/verify-dynamic-auth-to-local-e2e.sh \
+  scripts/audit/wait-for-audit-health.sh 2>/dev/null || true
 
 run_step() {
   local name="$1"
@@ -78,6 +83,11 @@ run_step "Brownfield pre-seed" \
 if [[ "${SKIP_KAFKA_DOWN}" != "true" ]]; then
   run_step "Kafka down (NEG-9)" \
     ./scripts/audit/verify-partition-plan-kafka-down-e2e.sh
+fi
+
+if [[ "${WITH_AUTH_ACCESS}" == "true" ]]; then
+  run_step "Dynamic auth_to_local + /access curl E2E" \
+    ./scripts/audit/verify-dynamic-auth-to-local-e2e.sh --no-enable
 fi
 
 echo ""
