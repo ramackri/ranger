@@ -1,0 +1,570 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Full audit E2E stack (single compose file — no tier includes).
+#
+# Containers:
+#   ranger, ranger-db, ranger-kdc, ranger-zk, ranger-solr,
+#   ranger-kafka, ranger-audit-ingestor, ranger-audit-dispatcher-solr,
+#   ranger-audit-dispatcher-hdfs, ranger-hadoop,
+#   ozone-scm, ozone-datanode, ozone-om,
+#   ranger-hive (when --with-hive / default)
+#   ranger-hbase (when --with-hbase / default)
+#
+# One command: ./setup-audit-e2e.sh  (see --hdfs-only / --ozone-only)
+# Docs: README-AUDIT-E2E.md
+
+services:
+  ranger:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - RANGER_VERSION=${RANGER_VERSION}
+        - RANGER_DB_TYPE=${RANGER_DB_TYPE}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger:latest
+    container_name: ranger
+    hostname: ranger.rangernw
+    volumes:
+      - ./dist/keytabs/ranger:/etc/keytabs
+      - ./dist/version:/home/ranger/dist/version:ro
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+      - ./scripts/hadoop/core-site.xml:/home/ranger/scripts/core-site.xml:ro
+      - ./scripts/admin/ranger-admin-install-${RANGER_DB_TYPE}.properties:/opt/ranger/admin/install.properties
+    stdin_open: true
+    tty: true
+    networks:
+      - ranger
+    ports:
+      - "6080:6080"
+    depends_on:
+      ranger-kdc:
+        condition: service_started
+      ranger-zk:
+        condition: service_started
+      ranger-db:
+        condition: service_healthy
+      ranger-solr:
+        condition: service_started
+    environment:
+      - RANGER_VERSION
+      - RANGER_DB_TYPE
+      - KERBEROS_ENABLED
+      - DEBUG_ADMIN=${DEBUG_ADMIN:-false}
+      - JAVA_OPTS
+    command:
+      - /home/ranger/scripts/ranger.sh
+
+  ranger-kdc:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-kdc
+      args:
+        - REALM=${KERBEROS_REALM}
+        - KDC_HOST=${KERBEROS_KDC_HOST}
+        - MASTER_PASSWORD=${KERBEROS_MASTER_PASSWORD}
+        - ADMIN_PRINCIPAL=${KERBEROS_ADMIN_PRINCIPAL}
+        - ADMIN_PASSWORD=${KERBEROS_ADMIN_PASSWORD}
+    image: ranger-kdc:latest
+    container_name: ranger-kdc
+    hostname: ranger-kdc.rangernw
+    volumes:
+      - ./dist/keytabs:/etc/keytabs
+    networks:
+      - ranger
+    ports:
+      - "88:88"
+      - "88:88/udp"
+      - "749:749"
+
+  ranger-db:
+    extends:
+      service: ${RANGER_DB_TYPE}
+      file: docker-compose.ranger-db.yml
+
+  ranger-zk:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-zk
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - ZK_VERSION=${ZK_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-zk
+    container_name: ranger-zk
+    hostname: ranger-zk.rangernw
+    volumes:
+      - ./dist/keytabs/ranger-zk:/etc/keytabs
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+      - ./scripts/zk/jaas.conf:/etc/zookeeper/jaas.conf
+      - ./scripts/zk/zookeeper-with-kerberos.sh:/zookeeper-with-kerberos.sh:ro
+    entrypoint: [ "/bin/bash", "/zookeeper-with-kerberos.sh" ]
+    depends_on:
+      ranger-kdc:
+        condition: service_started
+    networks:
+      - ranger
+    ports:
+      - "2181:2181"
+    environment:
+      - KERBEROS_ENABLED
+
+  ranger-solr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-solr
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - SOLR_VERSION=${SOLR_VERSION}
+        - SOLR_PLUGIN_VERSION=${SOLR_PLUGIN_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-solr
+    container_name: ranger-solr
+    hostname: ranger-solr.rangernw
+    volumes:
+      - ./dist/keytabs/ranger-solr:/etc/keytabs
+      - ./scripts/solr/solr-ranger_audits:/opt/solr/server/solr/configsets/ranger_audits/conf
+      - ./scripts/solr/solr-ranger_audits:/var/solr/data/ranger_audits/conf
+      - ./scripts/solr/ranger_audits/core.properties:/var/solr/data/ranger_audits/core.properties
+      - ./scripts/solr/ranger-solr-plugin-install.properties:/opt/ranger/ranger-solr-plugin/install.properties
+      - ../../plugin-solr/conf/ranger-solr-security-changes.cfg:/opt/ranger/ranger-solr-plugin/install/conf.templates/enable/ranger-solr-security-changes.cfg:ro
+      - ./scripts/solr/core-site.xml:/opt/solr/server/resources/core-site.xml
+      - ./scripts/solr/solr-jaas.conf:/var/solr/data/jaas.conf
+      - ./scripts/solr/solr-security.json:/var/solr/data/security.json
+      - ./scripts/solr/ranger-solr.sh:/opt/ranger/ranger-solr.sh
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf
+    networks:
+      - ranger
+    ports:
+      - "8983:8983"
+    depends_on:
+      ranger-kdc:
+        condition: service_started
+      ranger-zk:
+        condition: service_started
+    environment:
+      - KERBEROS_ENABLED
+      - KRB5_CONFIG=/etc/krb5.conf
+      - SOLR_SECURITY_MANAGER_ENABLED=false
+    command:
+      - solr-precreate
+      - ranger_audits
+      - /opt/solr/server/solr/configsets/ranger_audits/
+
+  ranger-kafka:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-kafka
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - KAFKA_VERSION=${KAFKA_VERSION}
+        - KAFKA_PLUGIN_VERSION=${KAFKA_PLUGIN_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-kafka
+    container_name: ranger-kafka
+    hostname: ranger-kafka.rangernw
+    volumes:
+      - ./dist/keytabs/ranger-kafka:/etc/keytabs
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+      - ./scripts/hadoop/core-site.xml:/home/ranger/scripts/core-site.xml:ro
+      - ./scripts/hadoop/hdfs-client-site.xml:/home/ranger/scripts/hdfs-site.xml:ro
+      - ./scripts/kafka/kafka-server-jaas.conf:/home/ranger/scripts/kafka-server-jaas.conf
+      - ./dist/version:/home/ranger/dist/version:ro
+      - ./scripts/kafka/ranger-kafka-plugin-install.properties:/opt/ranger/ranger-kafka-plugin/install.properties
+      - ./scripts/kafka/ensure-kafka-plugin-audit-jars.sh:/home/ranger/scripts/ensure-kafka-plugin-audit-jars.sh:ro
+      - ./scripts/kafka/apply-kafka-plugin-audit-config.sh:/home/ranger/scripts/apply-kafka-plugin-audit-config.sh:ro
+      - ./scripts/kafka/apply-kafka-plugin-repo-config.sh:/home/ranger/scripts/apply-kafka-plugin-repo-config.sh:ro
+      - ./scripts/kafka/trigger-kafka-plugin-audit-e2e.sh:/home/ranger/scripts/trigger-kafka-plugin-audit-e2e.sh:ro
+      - ./scripts/kafka/restart-kafka-broker-docker.sh:/home/ranger/scripts/restart-kafka-broker-docker.sh:ro
+    stdin_open: true
+    tty: true
+    networks:
+      - ranger
+    ports:
+      - "9092:9092"
+    depends_on:
+      ranger:
+        condition: service_started
+      ranger-zk:
+        condition: service_started
+    environment:
+      - KAFKA_VERSION
+      - KAFKA_PLUGIN_VERSION
+      - KERBEROS_ENABLED
+
+  ranger-hadoop:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-hadoop
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - HADOOP_VERSION=${HADOOP_VERSION}
+        - HDFS_PLUGIN_VERSION=${HDFS_PLUGIN_VERSION}
+        - YARN_PLUGIN_VERSION=${YARN_PLUGIN_VERSION}
+        - TEZ_VERSION=${TEZ_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-hadoop
+    container_name: ranger-hadoop
+    hostname: ranger-hadoop.rangernw
+    volumes:
+      - ./dist/keytabs/ranger-hadoop:/etc/keytabs
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+      - ./dist/version:/home/ranger/dist/version:ro
+      - ./scripts/hadoop/ranger-hdfs-plugin-install.properties:/opt/ranger/ranger-hdfs-plugin/install.properties
+      - ./scripts/hadoop/ranger-yarn-plugin-install.properties:/opt/ranger/ranger-yarn-plugin/install.properties
+      - ./scripts/hadoop/core-site.xml:/home/ranger/scripts/core-site.xml:ro
+      - ./scripts/hadoop/hdfs-site.xml:/home/ranger/scripts/hdfs-site.xml:ro
+      - ./scripts/hadoop/yarn-site.xml:/home/ranger/scripts/yarn-site.xml:ro
+    stdin_open: true
+    tty: true
+    networks:
+      - ranger
+    ports:
+      - "9000:9000"
+      - "8088:8088"
+    depends_on:
+      ranger:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "/home/ranger/scripts/ranger-hadoop-healthcheck.sh"]
+      interval: 20s
+      timeout: 10s
+      retries: 40
+      start_period: 40s
+    environment:
+      - HADOOP_VERSION
+      - HDFS_PLUGIN_VERSION
+      - YARN_PLUGIN_VERSION
+      - TEZ_VERSION
+      - KERBEROS_ENABLED
+
+  ranger-hive:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-hive
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - HIVE_HADOOP_VERSION=${HIVE_HADOOP_VERSION}
+        - HIVE_VERSION=${HIVE_VERSION}
+        - HIVE_PLUGIN_VERSION=${HIVE_PLUGIN_VERSION}
+        - TEZ_VERSION=${TEZ_VERSION}
+        - RANGER_DB_TYPE=${RANGER_DB_TYPE}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-hive
+    container_name: ranger-hive
+    hostname: ranger-hive.rangernw
+    volumes:
+      - ./dist/keytabs/ranger-hive:/etc/keytabs
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+      - ./dist/version:/home/ranger/dist/version:ro
+      - ./scripts/hive/ranger-hive-plugin-install.properties:/opt/ranger/ranger-hive-plugin/install.properties
+      - ./scripts/hive/hive-site-${RANGER_DB_TYPE}.xml:/home/ranger/scripts/hive-site.xml:ro
+      - ./scripts/hadoop/core-site.xml:/home/ranger/scripts/core-site.xml:ro
+      - ./scripts/hive/hive-log4j2.properties:/opt/hive/conf/hive-log4j2.properties
+      - ./scripts/hive/hive-metastore-log4j2.properties:/opt/hive/conf/hive-metastore-log4j2.properties
+      - ./scripts/hive/enable-hive-plugin-docker.sh:/home/ranger/scripts/hive/enable-hive-plugin-docker.sh:ro
+      - ./scripts/hive/apply-hive-plugin-audit-config.sh:/home/ranger/scripts/hive/apply-hive-plugin-audit-config.sh:ro
+    stdin_open: true
+    tty: true
+    networks:
+      - ranger
+    ports:
+      - "10000:10000"
+      - "9083:9083"
+    depends_on:
+      ranger:
+        condition: service_started
+      ranger-zk:
+        condition: service_started
+      ranger-hadoop:
+        condition: service_healthy
+    environment:
+      - HIVE_HADOOP_VERSION
+      - HIVE_VERSION
+      - HIVE_PLUGIN_VERSION
+      - TEZ_VERSION
+      - RANGER_DB_TYPE
+      - KERBEROS_ENABLED
+
+  ranger-hbase:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-hbase
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - HBASE_VERSION=${HBASE_VERSION}
+        - HBASE_PLUGIN_VERSION=${HBASE_PLUGIN_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-hbase
+    container_name: ranger-hbase
+    hostname: ranger-hbase.rangernw
+    volumes:
+      - ./dist/keytabs/ranger-hbase:/etc/keytabs
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+      - ./dist/version:/home/ranger/dist/version:ro
+      - ./scripts/hbase/ranger-hbase-plugin-install.properties:/opt/ranger/ranger-hbase-plugin/install.properties
+      - ./scripts/hbase/hbase-site.xml:/home/ranger/scripts/hbase-site.xml:ro
+      - ./scripts/hadoop/core-site.xml:/home/ranger/scripts/core-site.xml:ro
+      - ./scripts/hbase/apply-hbase-plugin-audit-config.sh:/home/ranger/scripts/apply-hbase-plugin-audit-config.sh:ro
+      - ./scripts/hbase/trigger-hbase-plugin-audit-e2e.sh:/home/ranger/scripts/trigger-hbase-plugin-audit-e2e.sh:ro
+    stdin_open: true
+    tty: true
+    networks:
+      - ranger
+    ports:
+      - "16000:16000"
+      - "16010:16010"
+      - "16020:16020"
+      - "16030:16030"
+    depends_on:
+      ranger-hadoop:
+        condition: service_healthy
+      ranger-zk:
+        condition: service_started
+    environment:
+      - HBASE_VERSION
+      - HBASE_PLUGIN_VERSION
+      - KERBEROS_ENABLED
+
+  ranger-audit-ingestor:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-audit-ingestor
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - RANGER_VERSION=${RANGER_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-audit-ingestor:latest
+    container_name: ranger-audit-ingestor
+    hostname: ranger-audit-ingestor.rangernw
+    networks:
+      ranger:
+        aliases:
+          - ranger-audit-ingestor.rangernw
+    stdin_open: true
+    tty: true
+    depends_on:
+      ranger-kdc:
+        condition: service_started
+      ranger-kafka:
+        condition: service_started
+    ports:
+      - "7081:7081"
+      - "7182:7182"
+    environment:
+      JAVA_HOME: /opt/java/openjdk
+      AUDIT_INGESTOR_HOME_DIR: /opt/ranger/audit-ingestor
+      AUDIT_INGESTOR_CONF_DIR: /opt/ranger/audit-ingestor/conf
+      AUDIT_INGESTOR_LOG_DIR: /var/log/ranger/audit-ingestor
+      AUDIT_INGESTOR_HEAP: "-Xms512m -Xmx2g"
+      RANGER_VERSION: ${RANGER_VERSION}
+      KERBEROS_ENABLED: ${KERBEROS_ENABLED}
+      KAFKA_BOOTSTRAP_SERVERS: ranger-kafka.rangernw:9092
+    volumes:
+      - ./dist/keytabs/ranger-audit-ingestor:/etc/keytabs
+      - ranger-audit-ingestor-logs:/var/log/ranger/audit-ingestor
+      - ranger-audit-ingestor-spool:/var/log/ranger/audit-ingestor/audit
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7081/api/audit/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  ranger-audit-dispatcher-solr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-audit-dispatcher
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - RANGER_VERSION=${RANGER_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-audit-dispatcher-solr:latest
+    container_name: ranger-audit-dispatcher-solr
+    hostname: ranger-audit-dispatcher-solr.rangernw
+    command: ["solr"]
+    stdin_open: true
+    tty: true
+    depends_on:
+      ranger-kdc:
+        condition: service_started
+      ranger-kafka:
+        condition: service_started
+      ranger-solr:
+        condition: service_started
+    ports:
+      - "7091:7090"
+    environment:
+      JAVA_HOME: /opt/java/openjdk
+      AUDIT_DISPATCHER_HOME_DIR: /opt/ranger/audit-dispatcher
+      AUDIT_DISPATCHER_CONF_DIR: /opt/ranger/audit-dispatcher/conf
+      AUDIT_DISPATCHER_LOG_DIR: /var/log/ranger/audit-dispatcher/solr
+      AUDIT_DISPATCHER_HEAP: "-Xms512m -Xmx2g"
+      RANGER_VERSION: ${RANGER_VERSION}
+      KERBEROS_ENABLED: ${KERBEROS_ENABLED}
+      KAFKA_BOOTSTRAP_SERVERS: ranger-kafka.rangernw:9092
+      SOLR_URL: http://ranger-solr.rangernw:8983/solr
+    networks:
+      - ranger
+    volumes:
+      - ./dist/keytabs/ranger-audit-dispatcher-solr:/etc/keytabs
+      - ranger-audit-dispatcher-solr-logs:/var/log/ranger/audit-dispatcher/solr
+      - ./scripts/audit-dispatcher/ranger-audit-dispatcher-solr-site.xml:/opt/ranger/audit-dispatcher/conf/ranger-audit-dispatcher-solr-site.xml
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7090/api/health/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  ranger-audit-dispatcher-hdfs:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-audit-dispatcher
+      args:
+        - RANGER_BASE_IMAGE=${RANGER_BASE_IMAGE}
+        - RANGER_BASE_VERSION=${RANGER_BASE_VERSION}
+        - RANGER_VERSION=${RANGER_VERSION}
+        - KERBEROS_ENABLED=${KERBEROS_ENABLED}
+    image: ranger-audit-dispatcher-hdfs:latest
+    container_name: ranger-audit-dispatcher-hdfs
+    hostname: ranger-audit-dispatcher-hdfs.rangernw
+    command: ["hdfs"]
+    stdin_open: true
+    tty: true
+    depends_on:
+      ranger-kdc:
+        condition: service_started
+      ranger-kafka:
+        condition: service_started
+      ranger-hadoop:
+        condition: service_healthy
+    ports:
+      - "7092:7090"
+    environment:
+      JAVA_HOME: /opt/java/openjdk
+      AUDIT_DISPATCHER_HOME_DIR: /opt/ranger/audit-dispatcher
+      AUDIT_DISPATCHER_CONF_DIR: /opt/ranger/audit-dispatcher/conf
+      AUDIT_DISPATCHER_LOG_DIR: /var/log/ranger/audit-dispatcher/hdfs
+      AUDIT_DISPATCHER_HEAP: "-Xms512m -Xmx2g"
+      RANGER_VERSION: ${RANGER_VERSION}
+      KERBEROS_ENABLED: ${KERBEROS_ENABLED}
+      KAFKA_BOOTSTRAP_SERVERS: ranger-kafka.rangernw:9092
+      HDFS_NAMENODE: ranger-hadoop.rangernw:9000
+    networks:
+      - ranger
+    volumes:
+      - ./dist/keytabs/ranger-audit-dispatcher-hdfs:/etc/keytabs
+      - ranger-audit-dispatcher-hdfs-logs:/var/log/ranger/audit-dispatcher/hdfs
+      - ./scripts/audit-dispatcher/ranger-audit-dispatcher-hdfs-site.xml:/opt/ranger/audit-dispatcher/conf/ranger-audit-dispatcher-hdfs-site.xml
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7090/api/health/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  scm:
+    image: ${OZONE_RUNNER_IMAGE}:${OZONE_RUNNER_VERSION}
+    container_name: ozone-scm
+    hostname: scm.rangernw
+    volumes:
+      - ./downloads/ozone-${OZONE_VERSION}:/opt/hadoop
+    networks:
+      - ranger
+    ports:
+      - 9876:9876
+      - 9860:9860
+    env_file:
+      - ./scripts/ozone/docker-config
+    environment:
+      OZONE-SITE.XML_hdds.scm.safemode.min.datanode: "${OZONE_SAFEMODE_MIN_DATANODES:-1}"
+    command: bash -c "(test -f /data/metadata/scm/current/VERSION || /opt/hadoop/bin/ozone scm --init) && exec /opt/hadoop/bin/ozone scm"
+
+  datanode:
+    image: ${OZONE_RUNNER_IMAGE}:${OZONE_RUNNER_VERSION}
+    container_name: ozone-datanode
+    hostname: datanode.rangernw
+    volumes:
+      - ./downloads/ozone-${OZONE_VERSION}:/opt/hadoop
+    networks:
+      - ranger
+    ports:
+      - 9864
+    command: bash -c "sudo mkdir -p /data/hdds /data/metadata && sudo chown -R hadoop:hadoop /data && exec /opt/hadoop/bin/ozone datanode"
+    env_file:
+      - ./scripts/ozone/docker-config
+
+  om:
+    build:
+      context: .
+      dockerfile: Dockerfile.ranger-ozone
+      args:
+        - OZONE_RUNNER_IMAGE=${OZONE_RUNNER_IMAGE}
+        - OZONE_RUNNER_VERSION=${OZONE_RUNNER_VERSION}
+        - OZONE_HOME=/opt/hadoop
+        - OZONE_PLUGIN_VERSION=${OZONE_PLUGIN_VERSION}
+    image: ranger-ozone:latest
+    container_name: ozone-om
+    hostname: om.rangernw
+    volumes:
+      - ./downloads/ozone-${OZONE_VERSION}:/opt/hadoop
+      - ./dist/ranger-${OZONE_PLUGIN_VERSION}-ozone-plugin:/opt/hadoop/ranger-ozone-plugin
+      - ./dist/keytabs/ranger-ozone:/etc/keytabs
+      - ./scripts/kdc/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - ranger
+    ports:
+      - 9874:9874
+      - 9862:9862
+    depends_on:
+      scm:
+        condition: service_started
+      datanode:
+        condition: service_started
+      ranger:
+        condition: service_started
+      ranger-solr:
+        condition: service_started
+    environment:
+      OZONE_OPTS: -XX:-UseContainerSupport -Dcom.sun.net.ssl.checkRevocation=false
+      OZONE_HOME: /opt/hadoop
+      OZONE_PLUGIN_VERSION: ${OZONE_PLUGIN_VERSION}
+      OZONE_VERSION: ${OZONE_VERSION}
+      KRB5_CONFIG: /etc/krb5.conf
+    env_file:
+      - ./scripts/ozone/docker-config
+    command: bash -c "kinit -kt /etc/keytabs/ozone.keytab ozone/ranger-ozone.rangernw@EXAMPLE.COM && /opt/hadoop/ranger-ozone-plugin/ranger-ozone-setup.sh && (test -f /data/metadata/om/current/VERSION || /opt/hadoop/bin/ozone om --init) && exec /opt/hadoop/bin/ozone om"
+
+volumes:
+  ranger-audit-ingestor-logs:
+  ranger-audit-ingestor-spool:
+  ranger-audit-dispatcher-solr-logs:
+  ranger-audit-dispatcher-hdfs-logs:
+
+networks:
+  ranger:
+    name: rangernw

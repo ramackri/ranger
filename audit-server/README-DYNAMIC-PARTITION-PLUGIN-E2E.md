@@ -6,7 +6,7 @@ Built on:
 
 | Layer | Branch / path |
 |-------|----------------|
-| Plugin audit pipelines (Hive, Ozone, Kafka, HDFS, HBase, Knox, KMS) | `ranger-audit-e2e-harness` — `dev-support/ranger-docker/scripts/{hive,kafka,...}/` |
+| Plugin audit pipelines (Hive, Ozone, Kafka, HDFS, HBase, Knox, KMS) | `dev-support/ranger-docker/setup-audit-e2e.sh` + `scripts/{hive,kafka,...}/` — [README-AUDIT-E2E.md](../dev-support/ranger-docker/README-AUDIT-E2E.md) |
 | Partition-plan REST + watcher | `ranger-kafka-dynamic-partition-plan` — `scripts/audit/partition-plan-e2e-lib.sh` |
 | Access + allowlist curl | `scripts/audit/dynamic-auth-to-local-e2e-lib.sh` |
 
@@ -63,10 +63,12 @@ Subset of plugins:
 ./scripts/audit/verify-dynamic-partition-plugin-e2e.sh --plugins kms,hiveServer2
 ```
 
-With harness trigger scripts (from `ranger-audit-e2e-harness` when checked out):
+With plugin trigger scripts from the audit E2E harness:
 
 ```bash
 ./scripts/audit/verify-dynamic-partition-plugin-e2e.sh --with-harness-triggers
+# or after full plugin → Solr pipelines:
+./scripts/audit/verify-audit-e2e-full.sh --with-dynamic-partition --with-auth-access
 ```
 
 Full suite (core partition-plan + auth + plugin onboard):
@@ -107,4 +109,4 @@ Then POST audits from the Trino container using `serviceName=dev_trino&appId=tri
 
 - [README-AUDIT-INGESTOR-ACCESS-CURL-E2E.md](README-AUDIT-INGESTOR-ACCESS-CURL-E2E.md) — SPNEGO, three identifiers, curl cookbook
 - [README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md](README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md) — operator cutover and REST API
-- `ranger-audit-e2e-harness` → `dev-support/ranger-docker/README-AUDIT-E2E.md` — full plugin → Solr pipelines
+- `dev-support/ranger-docker/README-AUDIT-E2E.md` — full plugin → Solr pipelines
