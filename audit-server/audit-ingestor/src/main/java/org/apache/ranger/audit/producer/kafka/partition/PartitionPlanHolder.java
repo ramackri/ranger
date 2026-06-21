@@ -54,6 +54,7 @@ public final class PartitionPlanHolder {
         PartitionPlanValidator.validate(plan, kafkaPartitionCount);
         planRef.set(plan);
         lastInstalledVersion = plan.getVersion();
+        AuthToLocalRuleComposer.getInstance().applyForPlan(plan);
     }
 
     /**
@@ -82,5 +83,6 @@ public final class PartitionPlanHolder {
     public void resetForTests() {
         planRef.set(null);
         lastInstalledVersion = 0;
+        AuthToLocalRuleComposer.getInstance().resetForTests();
     }
 }

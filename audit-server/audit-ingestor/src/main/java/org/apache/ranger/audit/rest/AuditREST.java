@@ -23,7 +23,9 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.security.authentication.util.KerberosName;
 import org.apache.ranger.audit.model.AuthzAuditEvent;
 import org.apache.ranger.audit.producer.AuditDestinationMgr;
+import org.apache.ranger.audit.producer.kafka.partition.AuthToLocalRuleComposer;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanHolder;
+import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanKafkaConfig;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanService;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanConflictException;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
@@ -533,21 +535,26 @@ public class AuditREST {
     }
 
     /**
-     * Rules are loaded from ranger.audit.ingestor.auth.to.local property in ranger-audit-ingestor-site.xml.
+     * Loads the auth_to_local catalog from ranger-audit-ingestor-site.xml. When dynamic partition-plan
+     * mode is disabled, applies the full catalog immediately. When enabled, rules are composed from
+     * partition-plan allowlists on {@link PartitionPlanHolder#install(PartitionPlan, Integer)}.
      */
     private static void initializeAuthToLocal() {
         AuditServerConfig config = AuditServerConfig.getInstance();
         String authToLocalRules = config.get(AuditServerConstants.PROP_AUTH_TO_LOCAL);
-        if (StringUtils.isNotEmpty(authToLocalRules)) {
-            try {
-                KerberosName.setRules(authToLocalRules);
-                LOG.debug("Auth_to_local rules: {}", authToLocalRules);
-            } catch (Exception e) {
-                LOG.error("Failed to set auth_to_local rules from configuration: {}", e.getMessage(), e);
-            }
-        } else {
+        if (StringUtils.isEmpty(authToLocalRules)) {
             LOG.warn("No auth_to_local rules configured. Kerberos principal mapping may not work correctly.");
             LOG.warn("Set property '{}' in ranger-audit-ingestor-site.xml", AuditServerConstants.PROP_AUTH_TO_LOCAL);
+            return;
+        }
+
+        AuthToLocalRuleComposer composer = AuthToLocalRuleComposer.getInstance();
+        composer.initializeFromConfig();
+        if (PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(config.getProperties(), AuditServerConstants.PROP_PREFIX_AUDIT_SERVER.substring(0, AuditServerConstants.PROP_PREFIX_AUDIT_SERVER.length() - 1))) {
+            LOG.info("Dynamic partition plan enabled; auth_to_local rules will be composed from allowlisted short names on plan install");
+        } else {
+            composer.applyStaticRules();
+            LOG.debug("Applied static auth_to_local catalog from site XML");
         }
     }
 
