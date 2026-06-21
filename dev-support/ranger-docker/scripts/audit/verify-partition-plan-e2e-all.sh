@@ -21,6 +21,7 @@
 #   ./scripts/audit/verify-partition-plan-e2e-all.sh --skip-kafka-down
 #   ./scripts/audit/verify-partition-plan-e2e-all.sh --with-audit-smoke
 #   ./scripts/audit/verify-partition-plan-e2e-all.sh --with-auth-access
+#   ./scripts/audit/verify-partition-plan-e2e-all.sh --with-plugin-onboard
 
 set -euo pipefail
 
@@ -29,6 +30,7 @@ cd "${SCRIPT_DIR}"
 
 SKIP_KAFKA_DOWN=false
 WITH_AUTH_ACCESS=false
+WITH_PLUGIN_ONBOARD=false
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --skip-kafka-down) SKIP_KAFKA_DOWN=true; shift ;;
     --with-audit-smoke) EXTRA_ARGS+=(--with-audit-smoke); shift ;;
     --with-auth-access) WITH_AUTH_ACCESS=true; shift ;;
+    --with-plugin-onboard) WITH_PLUGIN_ONBOARD=true; shift ;;
     --timeout) EXTRA_ARGS+=(--timeout "${2:?}"); shift 2 ;;
     -h|--help)
       sed -n '19,23p' "$0"
@@ -53,6 +56,7 @@ chmod +x scripts/audit/verify-partition-plan-e2e.sh \
   scripts/audit/verify-partition-plan-brownfield-e2e.sh \
   scripts/audit/verify-partition-plan-kafka-down-e2e.sh \
   scripts/audit/verify-dynamic-auth-to-local-e2e.sh \
+  scripts/audit/verify-dynamic-partition-plugin-e2e.sh \
   scripts/audit/wait-for-audit-health.sh 2>/dev/null || true
 
 run_step() {
@@ -88,6 +92,11 @@ fi
 if [[ "${WITH_AUTH_ACCESS}" == "true" ]]; then
   run_step "Dynamic auth_to_local + /access curl E2E" \
     ./scripts/audit/verify-dynamic-auth-to-local-e2e.sh --no-enable
+fi
+
+if [[ "${WITH_PLUGIN_ONBOARD}" == "true" ]]; then
+  run_step "Dynamic partition onboard-repo + Kafka routing E2E" \
+    ./scripts/audit/verify-dynamic-partition-plugin-e2e.sh --no-enable
 fi
 
 echo ""
