@@ -24,7 +24,7 @@ import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplacement;
 import org.apache.ranger.audit.producer.kafka.partition.model.PluginPartitionAssignment;
 import org.apache.ranger.audit.producer.kafka.partition.model.PromotePlugin;
-import org.apache.ranger.audit.producer.kafka.partition.model.PluginScaleRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.PluginScale;
 import org.apache.ranger.audit.producer.kafka.partition.model.ServiceAllowlistEntry;
 import org.apache.ranger.audit.server.AuditServerConstants;
 import org.junit.jupiter.api.AfterEach;
@@ -96,7 +96,7 @@ public class PartitionPlanServiceMutationTest {
         MutableRegistry registry = new MutableRegistry(initialPlan);
         PartitionPlanService service = service(registry, new NoOpAuditTopicPartitionGrower());
 
-        PartitionPlan result = service.scalePlugin("hiveServer2", new PluginScaleRequest(2, 1), "ops");
+        PartitionPlan result = service.scalePlugin("hiveServer2", new PluginScale(2, 1), "ops");
 
         assertEquals(2, result.getVersion());
         assertEquals(17, result.getTopicPartitionCount());
@@ -151,7 +151,7 @@ public class PartitionPlanServiceMutationTest {
         PartitionPlanService service = service(registry, new NoOpAuditTopicPartitionGrower());
 
         PartitionPlanException error = assertThrows(PartitionPlanException.class,
-                () -> service.scalePlugin("hiveServer2", new PluginScaleRequest(0, 1), "ops"));
+                () -> service.scalePlugin("hiveServer2", new PluginScale(0, 1), "ops"));
 
         assertTrue(error.getMessage().contains("additionalPartitions"));
     }
@@ -318,10 +318,10 @@ public class PartitionPlanServiceMutationTest {
         MutableRegistry registry = new MutableRegistry(initialPlan);
         PartitionPlanService service = service(registry, new NoOpAuditTopicPartitionGrower());
 
-        service.scalePlugin("hiveServer2", new PluginScaleRequest(2, 1), "ops");
+        service.scalePlugin("hiveServer2", new PluginScale(2, 1), "ops");
         assertEquals(1, registry.getWriteCount());
 
-        PartitionPlan second = service.scalePlugin("hiveServer2", new PluginScaleRequest(2, 2), "ops");
+        PartitionPlan second = service.scalePlugin("hiveServer2", new PluginScale(2, 2), "ops");
 
         assertEquals(3, second.getVersion());
         assertEquals(2, registry.getWriteCount());

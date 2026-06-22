@@ -32,7 +32,7 @@ import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanE
 import org.apache.ranger.audit.producer.kafka.partition.model.OnboardService;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplacement;
-import org.apache.ranger.audit.producer.kafka.partition.model.PluginScaleRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.PluginScale;
 import org.apache.ranger.audit.producer.kafka.partition.model.PromotePlugin;
 import org.apache.ranger.audit.provider.MiscUtil;
 import org.apache.ranger.audit.server.AuditServerConfig;
@@ -350,7 +350,7 @@ public class AuditREST {
     @Path("/partition-plan/plugins/{pluginId}")
     @Consumes("application/json")
     @Produces("application/json")
-    public Response scalePluginAssignment(@PathParam("pluginId") String pluginId, PluginScaleRequest request, @Context HttpServletRequest httpRequest) {
+    public Response scalePluginAssignment(@PathParam("pluginId") String pluginId, PluginScale pluginScale, @Context HttpServletRequest httpRequest) {
         LOG.debug("==> AuditREST.scalePluginAssignment(pluginId={})", pluginId);
         Response ret;
         if (!partitionPlanService.isDynamicPartitionPlanEnabled()) {
@@ -361,8 +361,7 @@ public class AuditREST {
                 ret = authFailure;
             } else {
                 try {
-                    ret = toSuccessfulPartitionPlanResponse(
-                            partitionPlanService.scalePlugin(pluginId, request, resolveUpdatedBy(httpRequest)));
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.scalePlugin(pluginId, pluginScale, resolveUpdatedBy(httpRequest)));
                 } catch (PartitionPlanConflictException e) {
                     ret = toPartitionPlanConflictResponse("PATCH /partition-plan/plugins/" + pluginId, e);
                 } catch (PartitionPlanException e) {

@@ -25,7 +25,7 @@ import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanE
 import org.apache.ranger.audit.producer.kafka.partition.model.OnboardService;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplacement;
 import org.apache.ranger.audit.producer.kafka.partition.model.PromotePlugin;
-import org.apache.ranger.audit.producer.kafka.partition.model.PluginScaleRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.PluginScale;
 
 import java.util.List;
 
@@ -45,12 +45,6 @@ public final class PartitionPlanRequestValidator {
         }
     }
 
-    /** @deprecated Use {@link #validatePatchRequest(PartitionPlanReplacement)}. */
-    @Deprecated
-    public static void validateReplaceRequest(PartitionPlanReplacement partitionPlanUpdate) {
-        validatePatchRequest(partitionPlanUpdate);
-    }
-
     public static void validatePromotePlugin(PromotePlugin promotePluginRequest) {
         if (promotePluginRequest == null) {
             throw new PartitionPlanException("Promote plugin request is required");
@@ -65,13 +59,13 @@ public final class PartitionPlanRequestValidator {
         }
     }
 
-    public static void validateScalePlugin(String pluginId, PluginScaleRequest scalePluginRequest) {
-        if (scalePluginRequest == null) {
+    public static void validateScalePlugin(String pluginId, PluginScale scalePlugin) {
+        if (scalePlugin == null) {
             throw new PartitionPlanException("Plugin scale request is required");
         }
         validateNonBlankPluginId(pluginId);
-        validatePositiveCount(scalePluginRequest.getAdditionalPartitions(), "additionalPartitions");
-        validateExpectedVersion(scalePluginRequest.getExpectedVersion());
+        validatePositiveCount(scalePlugin.getAdditionalPartitions(), "additionalPartitions");
+        validateExpectedVersion(scalePlugin.getExpectedVersion());
     }
 
     public static void validateOnboardService(OnboardService onboardServiceRequest) {

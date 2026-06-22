@@ -91,8 +91,7 @@ public class AuthToLocalRuleCatalog {
         Set<String>  shortNamesMatchedByCatalogRule = new LinkedHashSet<>();
 
         for (PrimaryCatalogRule catalogRule : primaryCatalogRulesInOrder) {
-            if (catalogRule.mappedShortName != null
-                    && normalizedAllowedShortNames.contains(catalogRule.mappedShortName)) {
+            if (catalogRule.mappedShortName != null && normalizedAllowedShortNames.contains(catalogRule.mappedShortName)) {
                 composedRuleLines.add(catalogRule.ruleLine);
                 shortNamesMatchedByCatalogRule.add(catalogRule.mappedShortName);
             }
@@ -134,9 +133,7 @@ public class AuthToLocalRuleCatalog {
     }
 
     private static boolean isFallbackKerberosRule(String ruleLine) {
-        return "DEFAULT".equals(ruleLine)
-                || ruleLine.startsWith("RULE:[1:")
-                || ruleLine.contains("s/@.*//");
+        return "DEFAULT".equals(ruleLine) || ruleLine.startsWith("RULE:[1:") || ruleLine.contains("s/@.*//");
     }
 
     private static String buildGeneratedShortNameRule(String shortName) {

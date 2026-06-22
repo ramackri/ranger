@@ -29,12 +29,12 @@ import java.io.Serializable;
 
 @JsonAutoDetect(getterVisibility = Visibility.NONE, setterVisibility = Visibility.NONE, fieldVisibility = Visibility.ANY)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class PluginScaleRequest implements Serializable {
+public class PluginScale implements Serializable {
     private final int additionalPartitions;
     private final int expectedVersion;
 
     @JsonCreator
-    public PluginScaleRequest(@JsonProperty("additionalPartitions") int additionalPartitions, @JsonProperty("expectedVersion") int expectedVersion) {
+    public PluginScale(@JsonProperty("additionalPartitions") int additionalPartitions, @JsonProperty("expectedVersion") int expectedVersion) {
         this.additionalPartitions = additionalPartitions;
         this.expectedVersion      = expectedVersion;
     }

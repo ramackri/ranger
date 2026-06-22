@@ -79,14 +79,14 @@ public class PluginPartitionAssignment implements java.io.Serializable {
     }
 
     @Override
-    public boolean equals(Object other) {
-        if (this == other) {
+    public boolean equals(Object otherPluginPartitionAssignmentObj) {
+        if (this == otherPluginPartitionAssignmentObj) {
             return true;
         }
-        if (other == null || getClass() != other.getClass()) {
+        if (otherPluginPartitionAssignmentObj == null || getClass() != otherPluginPartitionAssignmentObj.getClass()) {
             return false;
         }
-        PluginPartitionAssignment otherAssignment = (PluginPartitionAssignment) other;
+        PluginPartitionAssignment otherAssignment = (PluginPartitionAssignment) otherPluginPartitionAssignmentObj;
         return Objects.equals(partitions, otherAssignment.partitions);
     }
 

@@ -25,7 +25,7 @@ import org.apache.ranger.audit.producer.kafka.partition.model.OnboardService;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlanReplacement;
 import org.apache.ranger.audit.producer.kafka.partition.model.PromotePlugin;
-import org.apache.ranger.audit.producer.kafka.partition.model.PluginScaleRequest;
+import org.apache.ranger.audit.producer.kafka.partition.model.PluginScale;
 import org.apache.ranger.audit.provider.MiscUtil;
 import org.apache.ranger.audit.server.AuditServerConfig;
 import org.apache.ranger.audit.server.AuditServerConstants;
@@ -69,7 +69,7 @@ public class PartitionPlanService {
         return plan;
     }
 
-    /** Merges a partial plan delta via REST PUT with optimistic locking. */
+    /** Merges a partial plan delta via REST PATCH with optimistic locking. */
     public PartitionPlan mergePartitionPlan(PartitionPlanReplacement partitionPlanUpdate, String updatedBy) {
         PartitionPlanRequestValidator.validatePatchRequest(partitionPlanUpdate);
         requireDynamicEnabled();
@@ -98,19 +98,10 @@ public class PartitionPlanService {
         try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
             PartitionPlan currentPlan = requirePlan(registry, auditTopic);
             requireExpectedVersion(currentPlan, promotePluginRequest.getExpectedVersion());
-            if (PartitionPlanAllocator.isPromoteAlreadyApplied(currentPlan,
-                    promotePluginRequest.getPluginId(),
-                    promotePluginRequest.getPartitionCount(),
-                    promotePluginRequest.getRepo(),
-                    promotePluginRequest.getAllowedUsers())) {
+            if (PartitionPlanAllocator.isPromoteAlreadyApplied(currentPlan, promotePluginRequest.getPluginId(), promotePluginRequest.getPartitionCount(), promotePluginRequest.getRepo(), promotePluginRequest.getAllowedUsers())) {
                 return returnCurrentPlanNoOp(currentPlan);
             }
-            PartitionPlan nextPlan = PartitionPlanAllocator.promotePlugin(currentPlan,
-                    promotePluginRequest.getPluginId(),
-                    promotePluginRequest.getPartitionCount(),
-                    updatedBy,
-                    promotePluginRequest.getRepo(),
-                    promotePluginRequest.getAllowedUsers());
+            PartitionPlan nextPlan = PartitionPlanAllocator.promotePlugin(currentPlan, promotePluginRequest.getPluginId(), promotePluginRequest.getPartitionCount(), updatedBy, promotePluginRequest.getRepo(), promotePluginRequest.getAllowedUsers());
             return publishMutation(registry, auditTopic, promotePluginRequest.getExpectedVersion(), currentPlan, nextPlan);
         } catch (PartitionPlanException e) {
             throw e;
@@ -127,19 +118,10 @@ public class PartitionPlanService {
         try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
             PartitionPlan currentPlan = requirePlan(registry, auditTopic);
             requireExpectedVersion(currentPlan, onboardServiceRequest.getExpectedVersion());
-            if (PartitionPlanAllocator.isOnboardAlreadyApplied(currentPlan,
-                    onboardServiceRequest.getServiceName(),
-                    onboardServiceRequest.getPluginId(),
-                    onboardServiceRequest.getPartitionCount(),
-                    onboardServiceRequest.getAllowedUsers())) {
+            if (PartitionPlanAllocator.isOnboardAlreadyApplied(currentPlan, onboardServiceRequest.getServiceName(), onboardServiceRequest.getPluginId(), onboardServiceRequest.getPartitionCount(), onboardServiceRequest.getAllowedUsers())) {
                 return returnCurrentPlanNoOp(currentPlan);
             }
-            PartitionPlan nextPlan = PartitionPlanAllocator.onboardRepo(currentPlan,
-                    onboardServiceRequest.getServiceName(),
-                    onboardServiceRequest.getPluginId(),
-                    onboardServiceRequest.getPartitionCount(),
-                    onboardServiceRequest.getAllowedUsers(),
-                    updatedBy);
+            PartitionPlan nextPlan = PartitionPlanAllocator.onboardRepo(currentPlan, onboardServiceRequest.getServiceName(), onboardServiceRequest.getPluginId(), onboardServiceRequest.getPartitionCount(), onboardServiceRequest.getAllowedUsers(), updatedBy);
             return publishMutation(registry, auditTopic, onboardServiceRequest.getExpectedVersion(), currentPlan, nextPlan);
         } catch (PartitionPlanException e) {
             throw e;
@@ -154,17 +136,14 @@ public class PartitionPlanService {
     }
 
     /** Appends tail partitions to a plugin already present in the plan. */
-    public PartitionPlan scalePlugin(String pluginId, PluginScaleRequest scalePluginRequest, String updatedBy) {
-        PartitionPlanRequestValidator.validateScalePlugin(pluginId, scalePluginRequest);
+    public PartitionPlan scalePlugin(String pluginId, PluginScale scalePlugin, String updatedBy) {
+        PartitionPlanRequestValidator.validateScalePlugin(pluginId, scalePlugin);
         requireDynamicEnabled();
         String auditTopic = resolveAuditTopicName();
         try (PartitionPlanRegistry registry = registryFactory.open(configProps, INGESTOR_PROP_PREFIX)) {
             PartitionPlan currentPlan = requirePlan(registry, auditTopic);
-            PartitionPlan nextPlan = PartitionPlanAllocator.scalePlugin(currentPlan,
-                    pluginId,
-                    scalePluginRequest.getAdditionalPartitions(),
-                    updatedBy);
-            return publishMutation(registry, auditTopic, scalePluginRequest.getExpectedVersion(), currentPlan, nextPlan);
+            PartitionPlan nextPlan = PartitionPlanAllocator.scalePlugin(currentPlan, pluginId, scalePlugin.getAdditionalPartitions(), updatedBy);
+            return publishMutation(registry, auditTopic, scalePlugin.getExpectedVersion(), currentPlan, nextPlan);
         } catch (PartitionPlanException e) {
             throw e;
         } catch (Exception e) {

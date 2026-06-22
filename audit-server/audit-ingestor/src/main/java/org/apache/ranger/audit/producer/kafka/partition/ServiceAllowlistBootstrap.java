@@ -47,13 +47,10 @@ public final class ServiceAllowlistBootstrap {
             return allowlistEntriesByRepo;
         }
         for (String propertyName : ingestorProperties.stringPropertyNames()) {
-            if (!propertyName.startsWith(PROP_PREFIX_AUDIT_SERVER_SERVICE)
-                    || !propertyName.endsWith(PROP_SUFFIX_ALLOWED_USERS)) {
+            if (!propertyName.startsWith(PROP_PREFIX_AUDIT_SERVER_SERVICE) || !propertyName.endsWith(PROP_SUFFIX_ALLOWED_USERS)) {
                 continue;
             }
-            String serviceRepoName = propertyName.substring(
-                    PROP_PREFIX_AUDIT_SERVER_SERVICE.length(),
-                    propertyName.length() - PROP_SUFFIX_ALLOWED_USERS.length());
+            String serviceRepoName = propertyName.substring(PROP_PREFIX_AUDIT_SERVER_SERVICE.length(), propertyName.length() - PROP_SUFFIX_ALLOWED_USERS.length());
             if (StringUtils.isBlank(serviceRepoName)) {
                 continue;
             }
@@ -83,12 +80,10 @@ public final class ServiceAllowlistBootstrap {
      */
     public static PartitionPlan mergeSiteXmlAllowlistsWhenPlanServicesMissing(
             PartitionPlan partitionPlan, Properties ingestorProperties) {
-        if (partitionPlan == null
-                || (partitionPlan.getServices() != null && !partitionPlan.getServices().isEmpty())) {
+        if (partitionPlan == null || (partitionPlan.getServices() != null && !partitionPlan.getServices().isEmpty())) {
             return partitionPlan;
         }
-        Map<String, ServiceAllowlistEntry> siteXmlAllowlistEntries =
-                loadAllowlistsFromProperties(ingestorProperties);
+        Map<String, ServiceAllowlistEntry> siteXmlAllowlistEntries = loadAllowlistsFromProperties(ingestorProperties);
         if (siteXmlAllowlistEntries.isEmpty()) {
             return partitionPlan;
         }

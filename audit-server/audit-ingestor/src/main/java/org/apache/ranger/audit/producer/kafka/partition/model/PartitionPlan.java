@@ -147,14 +147,14 @@ public class PartitionPlan implements Serializable {
     }
 
     @Override
-    public boolean equals(Object other) {
-        if (this == other) {
+    public boolean equals(Object otherPartitionPlanObj) {
+        if (this == otherPartitionPlanObj) {
             return true;
         }
-        if (other == null || getClass() != other.getClass()) {
+        if (otherPartitionPlanObj == null || getClass() != otherPartitionPlanObj.getClass()) {
             return false;
         }
-        PartitionPlan otherPartitionPlan = (PartitionPlan) other;
+        PartitionPlan otherPartitionPlan = (PartitionPlan) otherPartitionPlanObj;
         return version == otherPartitionPlan.version
                 && topicPartitionCount == otherPartitionPlan.topicPartitionCount
                 && Objects.equals(topic, otherPartitionPlan.topic)

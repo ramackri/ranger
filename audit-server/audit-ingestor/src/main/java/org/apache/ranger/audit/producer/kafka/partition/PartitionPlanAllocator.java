@@ -109,7 +109,7 @@ public class PartitionPlanAllocator {
         return isPromoteAlreadyApplied(current, pluginId, partitionCount, repo, allowedUsers);
     }
 
-    /** Full plan replace (REST PUT) with append-only checks against the current plan. */
+    /** Applies a merged plan with append-only checks against the current plan. */
     public static PartitionPlan replacePlan(PartitionPlan current, PartitionPlan proposed) {
         if (current == null || proposed == null) {
             throw new PartitionPlanException("Current and proposed plans are required");
@@ -175,13 +175,9 @@ public class PartitionPlanAllocator {
     }
 
     private static void assertPromoteNotConflicting(PartitionPlan current, String pluginId, int partitionCount, String repo, List<String> allowedUsers) {
-        if (isPromoteAlreadyApplied(current, pluginId, partitionCount, repo, allowedUsers)) {
-            return;
-        }
         PluginPartitionAssignment existing = Objects.requireNonNull(current.getPlugins().get(pluginId));
         if (existing.getPartitions().size() != partitionCount) {
-            throw new PartitionPlanException("Plugin '" + pluginId + "' already has "
-                    + existing.getPartitions().size() + " dedicated partition(s); requested " + partitionCount);
+            throw new PartitionPlanException("Plugin '" + pluginId + "' already has " + existing.getPartitions().size() + " dedicated partition(s); requested " + partitionCount);
         }
         if (StringUtils.isNotBlank(repo)) {
             ServiceAllowlistEntry serviceEntry = current.getServices().get(repo.trim());

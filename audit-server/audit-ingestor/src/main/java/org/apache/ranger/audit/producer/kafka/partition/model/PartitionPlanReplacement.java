@@ -36,7 +36,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Partial partition-plan update (REST PUT). Omitted or empty fields are inherited from the current plan.
+ * Partial partition-plan update (REST PATCH). Omitted or empty fields are inherited from the current plan.
  * {@code plugins} and {@code services} merge only entries whose keys are not already present.
  */
 @JsonAutoDetect(getterVisibility = Visibility.NONE, setterVisibility = Visibility.NONE, fieldVisibility = Visibility.ANY)
@@ -59,11 +59,6 @@ public class PartitionPlanReplacement implements Serializable {
         this.plugins             = copyPlugins(plugins);
         this.buffer              = buffer;
         this.services            = copyServices(services);
-    }
-
-    public PartitionPlanReplacement(int expectedVersion, int topicPartitionCount,
-            Map<String, PluginPartitionAssignment> plugins, PluginPartitionAssignment buffer) {
-        this(expectedVersion, topicPartitionCount, plugins, buffer, null);
     }
 
     public PartitionPlanReplacement(int expectedVersion, int topicPartitionCount,
