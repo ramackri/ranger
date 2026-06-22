@@ -143,14 +143,4 @@ public class AuthToLocalRuleCatalog {
     private static String joinRuleLines(List<String> ruleLines) {
         return String.join("\n", ruleLines);
     }
-
-    static final class PrimaryCatalogRule {
-        private final String ruleLine;
-        private final String mappedShortName;
-
-        PrimaryCatalogRule(String ruleLine, String mappedShortName) {
-            this.ruleLine        = ruleLine;
-            this.mappedShortName = mappedShortName;
-        }
-    }
 }
