@@ -14,11 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# E2E helpers: dynamic partition-plan onboard-repo + Kafka partition verification.
+# E2E helpers: dynamic partition-plan POST /services + Kafka partition verification.
 # Requires partition-plan-e2e-lib.sh and dynamic-auth-to-local-e2e-lib.sh.
 
 # repo|pluginId|shortName|partitionCount|source_container|keytab|principal
-# partitionCount is the default for onboard-repo when not overridden.
+# partitionCount is the default for POST /services when not overridden.
 readonly -a DPP_PLUGIN_ONBOARD_SPECS=(
   "dev_hdfs|hdfs|hdfs|2|ranger-hadoop|/etc/keytabs/hdfs.keytab|hdfs/ranger-hadoop.rangernw@EXAMPLE.COM"
   "dev_hive|hiveServer2|hive|2|ranger-hive|/etc/keytabs/hive.keytab|hive/ranger-hive.rangernw@EXAMPLE.COM"
@@ -75,11 +75,11 @@ dpp_onboard_repo_multi() {
   local version="$5"
   local url body
 
-  url="http://$(pp_ingestor_host "${CONTAINER}"):${INGESTOR_HTTP_PORT}/api/audit/partition-plan/onboard-repo"
+  url="http://$(pp_ingestor_host "${CONTAINER}"):${INGESTOR_HTTP_PORT}/api/audit/partition-plan/services"
   body="$(python3 -c \
     'import json,sys; repo,plugin,part,users,ver=sys.argv[1:6]; \
 users=[u.strip() for u in users.split(",") if u.strip()]; \
-print(json.dumps({"repo":repo,"pluginId":plugin,"partitionCount":int(part),"allowedUsers":users,"expectedVersion":int(ver)}))' \
+print(json.dumps({"serviceName":repo,"pluginId":plugin,"partitionCount":int(part),"allowedUsers":users,"expectedVersion":int(ver)}))' \
     "${repo}" "${plugin_id}" "${partition_count}" "${users_csv}" "${version}")"
   pp_ingestor_request "${CONTAINER}" POST "${url}" "${body}"
   [[ "${HTTP_CODE}" == "200" ]]
@@ -117,11 +117,11 @@ dpp_ensure_plugin_onboarded() {
 
   echo "  Onboard ${repo} pluginId=${plugin_id} partitions=${part_count} allowedUsers=[${users_csv}]..."
   if ! dpp_onboard_repo_multi "${repo}" "${plugin_id}" "${part_count}" "${users_csv}" "${version}"; then
-    pp_record_fail "onboard-repo ${repo} failed: HTTP ${HTTP_CODE} ${HTTP_BODY}"
+    pp_record_fail "POST /services ${repo} failed: HTTP ${HTTP_CODE} ${HTTP_BODY}"
     return 1
   fi
 
-  pp_record_pass "onboard-repo ${plugin_id} -> plan v$(pp_json_field "${HTTP_BODY}" version)"
+  pp_record_pass "POST /services ${plugin_id} -> plan v$(pp_json_field "${HTTP_BODY}" version)"
   if dael_wait_auth_to_local_applied "${CONTAINER}" 45; then
     pp_record_pass "auth_to_local recomposed after onboard ${plugin_id}"
   else

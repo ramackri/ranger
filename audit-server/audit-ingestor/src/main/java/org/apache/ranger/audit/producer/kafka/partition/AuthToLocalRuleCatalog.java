@@ -31,125 +31,129 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-/** Parsed {@code ranger.audit.ingestor.auth.to.local} catalog for dynamic rule composition. */
-final class AuthToLocalRuleCatalog {
-    private static final Pattern SUBSTITUTION_TARGET = Pattern.compile("s/\\.\\*/([^/]+)/\\s*$");
-    private static final String    SIMPLE_RULE_TEMPLATE = "RULE:[2:$1/$2@$0](%s/.*@.*)s/.*/%s/";
+/** Parses and composes Kerberos {@code auth_to_local} rules from the ingestor site XML catalog. */
+public class AuthToLocalRuleCatalog {
+    private static final Pattern RULE_SUBSTITUTION_SHORT_NAME_PATTERN =
+            Pattern.compile("s/\\.\\*/([^/]+)/\\s*$");
+    private static final String GENERATED_SHORT_NAME_RULE_TEMPLATE =
+            "RULE:[2:$1/$2@$0](%s/.*@.*)s/.*/%s/";
 
-    private final List<CatalogEntry> primaryRulesInOrder;
-    private final List<String>       tailRules;
+    private final List<PrimaryCatalogRule> primaryCatalogRulesInOrder;
+    private final List<String>           fallbackRuleLines;
 
-    AuthToLocalRuleCatalog(List<CatalogEntry> primaryRulesInOrder, List<String> tailRules) {
-        this.primaryRulesInOrder = Collections.unmodifiableList(new ArrayList<>(primaryRulesInOrder));
-        this.tailRules           = Collections.unmodifiableList(new ArrayList<>(tailRules));
+    AuthToLocalRuleCatalog(List<PrimaryCatalogRule> primaryCatalogRulesInOrder, List<String> fallbackRuleLines) {
+        this.primaryCatalogRulesInOrder = List.copyOf(primaryCatalogRulesInOrder);
+        this.fallbackRuleLines          = List.copyOf(fallbackRuleLines);
     }
 
-    static AuthToLocalRuleCatalog parse(String rawRules) {
-        List<CatalogEntry> primary = new ArrayList<>();
-        List<String>       tail    = new ArrayList<>();
-        for (String token : tokenizeRules(rawRules)) {
-            if (isTailRule(token)) {
-                tail.add(token);
+    public static AuthToLocalRuleCatalog parse(String rawAuthToLocalRules) {
+        List<PrimaryCatalogRule> primaryCatalogRulesInOrder = new ArrayList<>();
+        List<String>             fallbackRuleLines          = new ArrayList<>();
+        for (String ruleLine : tokenizeRuleLines(rawAuthToLocalRules)) {
+            if (isFallbackKerberosRule(ruleLine)) {
+                fallbackRuleLines.add(ruleLine);
             } else {
-                primary.add(new CatalogEntry(token, extractTargetShortName(token)));
+                primaryCatalogRulesInOrder.add(
+                        new PrimaryCatalogRule(ruleLine, extractMappedShortName(ruleLine)));
             }
         }
-        return new AuthToLocalRuleCatalog(primary, tail);
+        return new AuthToLocalRuleCatalog(primaryCatalogRulesInOrder, fallbackRuleLines);
     }
 
-    /** Full static rule set (all primary rules in catalog order + tail). */
-    String composeFull() {
-        List<String> lines = new ArrayList<>(primaryRulesInOrder.size() + tailRules.size());
-        for (CatalogEntry entry : primaryRulesInOrder) {
-            lines.add(entry.ruleLine);
+    /** Full static rule set (all primary catalog rules in order + fallback tail). */
+    public String composeFullCatalogRules() {
+        List<String> composedRuleLines = new ArrayList<>(primaryCatalogRulesInOrder.size() + fallbackRuleLines.size());
+        for (PrimaryCatalogRule catalogRule : primaryCatalogRulesInOrder) {
+            composedRuleLines.add(catalogRule.ruleLine);
         }
-        lines.addAll(tailRules);
-        return joinRules(lines);
+        composedRuleLines.addAll(fallbackRuleLines);
+        return joinRuleLines(composedRuleLines);
     }
 
     /**
      * Subset of catalog rules for the union of active short usernames from partition-plan allowlists.
-     * Unknown names get a generated {@code service/host@REALM -> service} rule before tail rules.
+     * Unknown names get a generated {@code service/host@REALM -> service} rule before fallback rules.
      */
-    String compose(Set<String> activeShortNames) {
-        if (activeShortNames == null || activeShortNames.isEmpty()) {
-            return composeFull();
+    public String composeRulesForAllowedShortNames(Set<String> allowedUserShortNames) {
+        if (allowedUserShortNames == null || allowedUserShortNames.isEmpty()) {
+            return composeFullCatalogRules();
         }
 
-        Set<String> active = activeShortNames.stream()
+        Set<String> normalizedAllowedShortNames = allowedUserShortNames.stream()
                 .filter(StringUtils::isNotBlank)
                 .map(String::trim)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (active.isEmpty()) {
-            return composeFull();
+        if (normalizedAllowedShortNames.isEmpty()) {
+            return composeFullCatalogRules();
         }
 
-        List<String> lines   = new ArrayList<>();
-        Set<String>  covered = new LinkedHashSet<>();
+        List<String> composedRuleLines              = new ArrayList<>();
+        Set<String>  shortNamesMatchedByCatalogRule = new LinkedHashSet<>();
 
-        for (CatalogEntry entry : primaryRulesInOrder) {
-            if (entry.targetShortName != null && active.contains(entry.targetShortName)) {
-                lines.add(entry.ruleLine);
-                covered.add(entry.targetShortName);
+        for (PrimaryCatalogRule catalogRule : primaryCatalogRulesInOrder) {
+            if (catalogRule.mappedShortName != null
+                    && normalizedAllowedShortNames.contains(catalogRule.mappedShortName)) {
+                composedRuleLines.add(catalogRule.ruleLine);
+                shortNamesMatchedByCatalogRule.add(catalogRule.mappedShortName);
             }
         }
 
-        List<String> generated = active.stream()
-                .filter(name -> !covered.contains(name))
+        List<String> generatedSimpleRuleLines = normalizedAllowedShortNames.stream()
+                .filter(shortName -> !shortNamesMatchedByCatalogRule.contains(shortName))
                 .sorted()
-                .map(AuthToLocalRuleCatalog::simpleRuleForShortName)
+                .map(AuthToLocalRuleCatalog::buildGeneratedShortNameRule)
                 .collect(Collectors.toList());
-        lines.addAll(generated);
-        lines.addAll(tailRules);
-        return joinRules(lines);
+        composedRuleLines.addAll(generatedSimpleRuleLines);
+        composedRuleLines.addAll(fallbackRuleLines);
+        return joinRuleLines(composedRuleLines);
     }
 
-    private static List<String> tokenizeRules(String rawRules) {
-        if (StringUtils.isBlank(rawRules)) {
+    public int getPrimaryCatalogRuleCount() {
+        return primaryCatalogRulesInOrder.size();
+    }
+
+    public static String extractMappedShortName(String ruleLine) {
+        if (StringUtils.isBlank(ruleLine)) {
+            return null;
+        }
+        Matcher substitutionMatcher = RULE_SUBSTITUTION_SHORT_NAME_PATTERN.matcher(ruleLine);
+        if (substitutionMatcher.find()) {
+            return substitutionMatcher.group(1);
+        }
+        return null;
+    }
+
+    private static List<String> tokenizeRuleLines(String rawAuthToLocalRules) {
+        if (StringUtils.isBlank(rawAuthToLocalRules)) {
             return Collections.emptyList();
         }
-        return Arrays.stream(rawRules.split("\\s+"))
+        return Arrays.stream(rawAuthToLocalRules.split("\\s+"))
                 .map(String::trim)
-                .filter(s -> s.startsWith("RULE:") || "DEFAULT".equals(s))
+                .filter(ruleLine -> ruleLine.startsWith("RULE:") || "DEFAULT".equals(ruleLine))
                 .collect(Collectors.toList());
     }
 
-    private static boolean isTailRule(String ruleLine) {
+    private static boolean isFallbackKerberosRule(String ruleLine) {
         return "DEFAULT".equals(ruleLine)
                 || ruleLine.startsWith("RULE:[1:")
                 || ruleLine.contains("s/@.*//");
     }
 
-    static String extractTargetShortName(String ruleLine) {
-        if (StringUtils.isBlank(ruleLine)) {
-            return null;
-        }
-        Matcher matcher = SUBSTITUTION_TARGET.matcher(ruleLine);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        return null;
+    private static String buildGeneratedShortNameRule(String shortName) {
+        return String.format(GENERATED_SHORT_NAME_RULE_TEMPLATE, shortName, shortName);
     }
 
-    static String simpleRuleForShortName(String shortName) {
-        return String.format(SIMPLE_RULE_TEMPLATE, shortName, shortName);
+    private static String joinRuleLines(List<String> ruleLines) {
+        return String.join("\n", ruleLines);
     }
 
-    private static String joinRules(List<String> lines) {
-        return String.join("\n", lines);
-    }
-
-    int getPrimaryRuleCount() {
-        return primaryRulesInOrder.size();
-    }
-
-    static final class CatalogEntry {
+    static final class PrimaryCatalogRule {
         private final String ruleLine;
-        private final String targetShortName;
+        private final String mappedShortName;
 
-        CatalogEntry(String ruleLine, String targetShortName) {
+        PrimaryCatalogRule(String ruleLine, String mappedShortName) {
             this.ruleLine        = ruleLine;
-            this.targetShortName = targetShortName;
+            this.mappedShortName = mappedShortName;
         }
     }
 }

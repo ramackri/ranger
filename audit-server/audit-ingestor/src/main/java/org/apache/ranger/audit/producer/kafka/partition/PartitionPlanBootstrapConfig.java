@@ -63,10 +63,6 @@ public final class PartitionPlanBootstrapConfig {
         return configuredPlugins;
     }
 
-    public int getDefaultPartitionsPerPlugin() {
-        return defaultPartitionsPerPlugin;
-    }
-
     public int getBufferPartitionCount() {
         return bufferPartitionCount;
     }

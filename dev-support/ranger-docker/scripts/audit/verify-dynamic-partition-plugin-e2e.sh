@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# E2E: dynamic partition allocation — onboard-repo REST per plugin + Kafka routing.
+# E2E: dynamic partition allocation — POST /partition-plan/services per plugin + Kafka routing.
 #
 # Flow (mirrors ranger-audit-e2e-harness plugin matrix):
 #   1. Enable dynamic mode (empty configured.plugins → buffer-only bootstrap)
-#   2. For each running plugin container: POST /partition-plan/onboard-repo
-#      (repo, pluginId, partitionCount, allowedUsers from auth_to_local short names)
+#   2. For each running plugin container: POST /partition-plan/services
+#      (serviceName, pluginId, partitionCount, allowedUsers from auth_to_local short names)
 #   3. POST /api/audit/access from plugin keytab → verify Kafka record partition ∈ plan
 #   4. Optional: run harness trigger-* scripts when present (KMS, Kafka, Knox, HBase)
 #
@@ -108,7 +108,7 @@ else
 fi
 
 echo ""
-echo "=== Phase 1: onboard-repo per running plugin (REST) ==="
+echo "=== Phase 1: POST /services per running plugin (REST) ==="
 spec=""
 while IFS= read -r spec; do
   [[ -n "${spec}" ]] || continue

@@ -47,7 +47,7 @@ public class ServiceAllowlistBootstrapTest {
         props.setProperty(PROP_PREFIX_AUDIT_SERVER_SERVICE + "dev_hive" + PROP_SUFFIX_ALLOWED_USERS, "hive");
         props.setProperty(PROP_PREFIX_AUDIT_SERVER_SERVICE + "dev_ozone" + PROP_SUFFIX_ALLOWED_USERS, "om, ozone");
 
-        Map<String, ServiceAllowlistEntry> services = ServiceAllowlistBootstrap.loadFromProperties(props);
+        Map<String, ServiceAllowlistEntry> services = ServiceAllowlistBootstrap.loadAllowlistsFromProperties(props);
 
         assertEquals(2, services.size());
         assertIterableEquals(List.of("hive"), services.get("dev_hive").getAllowedUsers());
@@ -67,7 +67,7 @@ public class ServiceAllowlistBootstrapTest {
         Properties props = new Properties();
         props.setProperty(PROP_PREFIX_AUDIT_SERVER_SERVICE + "dev_hive" + PROP_SUFFIX_ALLOWED_USERS, "hive");
 
-        PartitionPlan enriched = ServiceAllowlistBootstrap.enrichServicesFromXmlIfMissing(plan, props);
+        PartitionPlan enriched = ServiceAllowlistBootstrap.mergeSiteXmlAllowlistsWhenPlanServicesMissing(plan, props);
 
         assertEquals(3, enriched.getVersion());
         assertNotNull(enriched.getServices().get("dev_hive"));

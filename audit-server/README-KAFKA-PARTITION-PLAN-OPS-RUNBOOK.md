@@ -112,7 +112,7 @@ Shipped in `audit-ingestor/src/main/resources/conf/ranger-audit-ingestor-site.xm
 flowchart LR
   XML[XML bootstrap once] --> PlanTopic[ranger_audit_partition_plan]
   PlanTopic --> Mem[In-memory plan all pods]
-  REST[REST promote/scale] --> PlanTopic
+  REST[REST plugins/services] --> PlanTopic
   Mem --> Audits[ranger_audits produce]
 ```
 
@@ -125,9 +125,10 @@ Base path: `/api/audit/partition-plan` (requires authentication per `security-ap
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/api/audit/partition-plan` | Current in-memory plan |
-| `PUT` | `/api/audit/partition-plan` | Full plan replace (`expectedVersion` required) |
-| `POST` | `/api/audit/partition-plan/promote` | Move plugin from buffer → dedicated partitions |
-| `POST` | `/api/audit/partition-plan/scale` | Append tail partitions to existing plugin |
+| `PATCH` | `/api/audit/partition-plan` | Partial update (`expectedVersion` required; send only changed fields) |
+| `POST` | `/api/audit/partition-plan/plugins` | Move plugin from buffer → dedicated partitions |
+| `POST` | `/api/audit/partition-plan/services` | Upsert allowlist + promote plugin |
+| `PATCH` | `/api/audit/partition-plan/plugins/{pluginId}` | Append tail partitions to existing plugin |
 
 **E2E:** from `dev-support/ranger-docker`: `./scripts/audit/verify-partition-plan-e2e.sh --dynamic --with-audit-smoke`
 
@@ -145,7 +146,7 @@ curl -s -u admin:password \
 ```bash
 curl -s -u admin:password -X POST \
   -H 'Content-Type: application/json' \
-  "https://audit-ingestor:7182/api/audit/partition-plan/promote" \
+  "https://audit-ingestor:7182/api/audit/partition-plan/plugins" \
   -d '{
     "pluginId": "trino",
     "partitionCount": 3,
@@ -158,7 +159,7 @@ curl -s -u admin:password -X POST \
 ```bash
 curl -s -u admin:password -X POST \
   -H 'Content-Type: application/json' \
-  "https://audit-ingestor:7182/api/audit/partition-plan/scale" \
+  "https://audit-ingestor:7182/api/audit/partition-plan/plugins/hiveServer2" \
   -d '{
     "pluginId": "hiveServer2",
     "additionalPartitions": 2,
@@ -188,7 +189,7 @@ VERSION=$(curl -s -u admin:password \
 
 curl -s -u admin:password -X POST \
   -H 'Content-Type: application/json' \
-  "https://audit-ingestor:7182/api/audit/partition-plan/promote" \
+  "https://audit-ingestor:7182/api/audit/partition-plan/plugins" \
   -d "{\"pluginId\":\"trino\",\"partitionCount\":3,\"expectedVersion\":${VERSION}}" | jq .
 ```
 
@@ -199,14 +200,14 @@ curl -s -u admin:password -X POST \
 ### Onboard a new plugin without restart
 
 1. `GET` plan → note `version` and buffer size  
-2. `POST .../promote` with `pluginId`, `partitionCount`, `expectedVersion`  
+2. `POST .../plugins` with `pluginId`, `partitionCount`, `expectedVersion`  
 3. Wait ≤ `refresh.interval.ms` (default 30s) for all pods  
 4. Optional: `GET` on each pod to confirm same `version`  
 5. No dispatcher or plugin config change required
 
 ### Give more partitions to an existing plugin
 
-1. `POST .../scale` with `additionalPartitions`  
+1. `PATCH .../plugins/{pluginId}` with `additionalPartitions`, `expectedVersion`  
 2. Handler grows `ranger_audits` **before** publishing plan  
 3. Dispatchers rebalance automatically on next consumer group rebalance
 
@@ -242,8 +243,8 @@ curl -s -u admin:password -X POST \
 | Ingestor fails startup after enabling dynamic | Kafka down or ACL denied on plan topic | Fix connectivity/ACLs; check logs for `PartitionPlanWatcher` / `createPartitionPlanTopicIfNotExists` |
 | `GET` returns 503 feature disabled | `dynamic.enabled=false` or unset | Enable property + rolling restart |
 | Pods show different plan `version` | Watcher lag or Kafka read failure | Check watcher logs; compare `GET` across pods; verify plan topic with `kafka-console-consumer` |
-| `PUT`/`promote` returns 400 | Append-only violation or invalid plan | Compare proposed lists with current; no reshuffle of existing plugin IDs |
-| `promote` returns 503 grow topic | AdminClient cannot increase `ranger_audits` | Check ALTER ACL; broker limits |
+| `PATCH`/`POST` returns 400 | Append-only violation or invalid plan | Compare proposed lists with current; no reshuffle of existing plugin IDs |
+| `POST .../plugins` returns 503 grow topic | AdminClient cannot increase `ranger_audits` | Check ALTER ACL; broker limits |
 | XML edit had no effect | Dynamic mode on — XML is bootstrap-only | Use REST |
 | Dispatcher lag after scale | Rebalance in progress | Normal; tune poll interval / consumers if sustained |
 

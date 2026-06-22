@@ -18,7 +18,7 @@
 #
 # For each configured plugin repo:
 #   1. POST /access with plugin Kerberos principal (SPNEGO) → 200 + authenticatedUser
-#   2. Toggle allowlist via PUT partition-plan → 403 then 200
+#   2. Toggle allowlist via delta PATCH partition-plan (services only) → 403 then 200
 #   3. Cross-repo denial (hdfs principal → dev_kms) → 403
 #
 # Writes a curl cookbook: dist/audit-e2e/access-ingestor-curl-cookbook.sh
@@ -144,11 +144,11 @@ version="$(pp_json_field "${HTTP_BODY}" version)"
 new_repo="e2e_auth_$(date +%s)"
 new_plugin="e2eAuth$(date +%s)"
 if dael_onboard_repo "${new_repo}" "${new_plugin}" "hdfs" 2 "${version}"; then
-  pp_record_pass "onboard-repo ${new_repo} plugin=${new_plugin}"
+  pp_record_pass "POST /services ${new_repo} plugin=${new_plugin}"
   if dael_wait_auth_to_local_applied "${CONTAINER}" 30; then
-    pp_record_pass "auth_to_local recomposed after onboard-repo"
+    pp_record_pass "auth_to_local recomposed after POST /services"
   else
-    pp_record_fail "no auth_to_local log after onboard-repo"
+    pp_record_fail "no auth_to_local log after POST /services"
   fi
   if dael_container_running "ranger-hadoop"; then
     dael_access_post_from_container \
@@ -157,7 +157,7 @@ if dael_onboard_repo "${new_repo}" "${new_plugin}" "hdfs" 2 "${version}"; then
     dael_expect_access "POST /access to onboarded ${new_repo}" "200" || true
   fi
 else
-  pp_record_fail "onboard-repo failed: HTTP ${HTTP_CODE} ${HTTP_BODY}"
+  pp_record_fail "POST /services failed: HTTP ${HTTP_CODE} ${HTTP_BODY}"
 fi
 
 echo ""

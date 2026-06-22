@@ -117,9 +117,9 @@ chmod +x scripts/audit/verify-partition-plan-*.sh
 
 | ID | Scenario | Expected |
 |----|----------|----------|
-| POS-C1 | `POST .../promote` new plugin (e.g. `storm`) | **200**; version+1; plugin in `plugins` |
-| POS-C2 | `POST .../scale` existing plugin | **200**; tail IDs appended; topic grown if needed |
-| POS-C3 | `PUT` full plan + valid `expectedVersion` | **200** |
+| POS-C1 | `POST .../plugins` new plugin (e.g. `storm`) | **200**; version+1; plugin in `plugins` |
+| POS-C2 | `PATCH .../plugins/{pluginId}` existing plugin | **200**; tail IDs appended; topic grown if needed |
+| POS-C3 | `PATCH` partial plan + valid `expectedVersion` | **200** |
 | POS-C4 | Wait ≤ refresh interval | Same plan on repeated `GET` without restart |
 | POS-C5 | 409 retry | Re-`GET` version; retry succeeds |
 
@@ -157,7 +157,7 @@ chmod +x scripts/audit/verify-partition-plan-*.sh
 | NEG-3 | Stale `expectedVersion` | **409** + current plan body |
 | NEG-4 | Promote plugin already in plan (e.g. `hdfs`) | **400** |
 | NEG-5 | Scale plugin only in buffer | **400** |
-| NEG-6 | `PUT` reshuffles existing plugin IDs | **400** |
+| NEG-6 | `PATCH` reshuffles existing plugin IDs | **400** |
 | NEG-7 | Invalid / overlapping partition lists | **400** |
 | NEG-8 | `partitionCount: 0` | **400** |
 

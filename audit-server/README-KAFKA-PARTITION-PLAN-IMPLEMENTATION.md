@@ -259,7 +259,7 @@ When `dynamic.enabled=false`: return **404** or **503 Feature disabled**; do not
 
 ---
 
-## Phase 5 — REST PUT / promote / scale + AdminClient
+## Phase 5 — REST PATCH / plugins / services + AdminClient
 
 **Goal:** Control plane mutations with optimistic concurrency; grow `ranger_audits` **before** publishing plan that references new partition IDs.
 
@@ -267,9 +267,10 @@ When `dynamic.enabled=false`: return **404** or **503 Feature disabled**; do not
 
 | Method | Path | Body (summary) |
 |--------|------|----------------|
-| `PUT` | `/api/audit/partition-plan` | Full plan + `expectedVersion` |
-| `POST` | `/api/audit/partition-plan/promote` | `pluginId`, `partitionCount`, `expectedVersion` |
-| `POST` | `/api/audit/partition-plan/scale` | `pluginId`, `additionalPartitions`, `expectedVersion` |
+| `PATCH` | `/api/audit/partition-plan` | Partial plan + `expectedVersion` |
+| `POST` | `/api/audit/partition-plan/plugins` | `pluginId`, `partitionCount`, `expectedVersion` |
+| `PATCH` | `/api/audit/partition-plan/plugins/{pluginId}` | `additionalPartitions`, `expectedVersion` |
+| `POST` | `/api/audit/partition-plan/services` | `serviceName`, `pluginId`, `allowedUsers`, `partitionCount`, `expectedVersion` |
 
 ### Handler order (do not reorder)
 
@@ -286,16 +287,16 @@ When `dynamic.enabled=false`: return **404** or **503 Feature disabled**; do not
 
 | File | Change |
 |------|--------|
-| `PartitionPlanService` | Orchestrates GET/PUT/promote/scale |
+| `PartitionPlanService` | Orchestrates GET/PATCH/plugins/services mutations |
 | `AuditMessageQueueUtils` | Reuse `updateExistingTopicPartitions` for audit topic growth |
 
 ### Tests
 
 | Test class | Covers |
 |------------|--------|
-| `PartitionPlanServiceMutationTest` | Promote, scale, PUT replace; stale `expectedVersion` → conflict; peer publish before write; topic grow failure |
+| `PartitionPlanServiceMutationTest` | Promote, scale, PATCH replace; stale `expectedVersion` → conflict; peer publish before write; topic grow failure |
 
-**Status:** `PartitionPlanService` mutations + `AuditREST` PUT/POST endpoints; `AuditMessageQueueUtils.ensureTopicPartitionCount()`.
+**Status:** `PartitionPlanService` mutations + `AuditREST` PATCH/POST endpoints; `AuditMessageQueueUtils.ensureTopicPartitionCount()`.
 
 ---
 

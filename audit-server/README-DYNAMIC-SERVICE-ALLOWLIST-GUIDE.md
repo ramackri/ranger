@@ -24,7 +24,7 @@ under the License.
 - **Repo:** [README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md](README-KAFKA-DYNAMIC-PARTITIONING-GUIDE.md) — *Dynamic ingestor registry for Ranger audit-ingestor*
 - **Confluence:** [Dynamic Ingestor Registry Guide](https://cloudera.atlassian.net/wiki/spaces/ENG/pages/12043681813) (page `12043681813`)
 
-Service allowlist (`services` map) and Kafka partition routing (`plugins` / `buffer`) now share one document on **`ranger_audit_partition_plan`** and one REST surface: **`/api/audit/partition-plan`** (including `POST .../onboard-repo`).
+Service allowlist (`services` map) and Kafka partition routing (`plugins` / `buffer`) now share one document on **`ranger_audit_partition_plan`** and one REST surface: **`/api/audit/partition-plan`** (including `POST .../services`).
 
 **Design detail (allowlist authorization layers, security, API):** [README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md](README-DYNAMIC-SERVICE-ALLOWLIST-DESIGN.md)
 

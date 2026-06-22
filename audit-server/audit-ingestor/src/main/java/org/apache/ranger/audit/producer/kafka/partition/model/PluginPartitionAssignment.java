@@ -19,7 +19,10 @@
 
 package org.apache.ranger.audit.producer.kafka.partition.model;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
@@ -27,8 +30,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** Partition ID list for one plugin or the shared buffer. */
-public final class PluginPartitionAssignment {
+@JsonAutoDetect(getterVisibility = Visibility.NONE, setterVisibility = Visibility.NONE, fieldVisibility = Visibility.ANY)
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class PluginPartitionAssignment implements java.io.Serializable {
     private final List<Integer> partitions;
 
     @JsonCreator
@@ -36,7 +40,7 @@ public final class PluginPartitionAssignment {
         if (partitions == null || partitions.isEmpty()) {
             this.partitions = Collections.emptyList();
         } else {
-            this.partitions = Collections.unmodifiableList(new ArrayList<>(partitions));
+            this.partitions = List.copyOf(partitions);
         }
     }
 
@@ -75,15 +79,15 @@ public final class PluginPartitionAssignment {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) {
+    public boolean equals(Object other) {
+        if (this == other) {
             return true;
         }
-        if (o == null || getClass() != o.getClass()) {
+        if (other == null || getClass() != other.getClass()) {
             return false;
         }
-        PluginPartitionAssignment that = (PluginPartitionAssignment) o;
-        return Objects.equals(partitions, that.partitions);
+        PluginPartitionAssignment otherAssignment = (PluginPartitionAssignment) other;
+        return Objects.equals(partitions, otherAssignment.partitions);
     }
 
     @Override

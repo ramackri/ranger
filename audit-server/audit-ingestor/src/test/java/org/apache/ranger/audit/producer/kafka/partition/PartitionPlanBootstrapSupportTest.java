@@ -90,11 +90,6 @@ public class PartitionPlanBootstrapSupportTest {
         }
 
         @Override
-        public String getPlanTopicName() {
-            return "ranger_audit_partition_plan";
-        }
-
-        @Override
         public PartitionPlan readPlan(String auditTopicKey) {
             readCount++;
             if (readCount >= 2) {
@@ -123,11 +118,6 @@ public class PartitionPlanBootstrapSupportTest {
 
         private InMemoryPartitionPlanRegistry(PartitionPlan initialPlan) {
             this.planRef = new AtomicReference<>(initialPlan);
-        }
-
-        @Override
-        public String getPlanTopicName() {
-            return "ranger_audit_partition_plan";
         }
 
         @Override

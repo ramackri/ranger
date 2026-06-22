@@ -43,10 +43,10 @@ public final class AuthToLocalRuleComposer {
 
     private static final AuthToLocalRuleComposer INSTANCE = new AuthToLocalRuleComposer();
 
-    private volatile AuthToLocalRuleCatalog catalog;
-    private volatile String                 lastAppliedRules;
-    private volatile int                    lastAppliedPlanVersion;
-    private volatile Boolean                planTopicExistsOverrideForTests;
+    private volatile AuthToLocalRuleCatalog ruleCatalog;
+    private volatile String                 lastAppliedRuleText;
+    private volatile int                    lastAppliedPartitionPlanVersion;
+    private volatile Boolean                partitionPlanTopicExistsTestOverride;
 
     private AuthToLocalRuleComposer() {
     }
@@ -57,22 +57,22 @@ public final class AuthToLocalRuleComposer {
 
     /** Loads the rule catalog from {@code ranger.audit.ingestor.auth.to.local} site XML. */
     public synchronized void initializeFromConfig() {
-        Properties props = AuditServerConfig.getInstance().getProperties();
-        initializeFromProperties(props);
+        Properties ingestorProperties = AuditServerConfig.getInstance().getProperties();
+        initializeFromProperties(ingestorProperties);
     }
 
-    synchronized void initializeFromProperties(Properties props) {
-        String raw = props.getProperty(AuditServerConstants.PROP_AUTH_TO_LOCAL);
-        catalog = AuthToLocalRuleCatalog.parse(raw);
-        lastAppliedRules         = null;
-        lastAppliedPlanVersion   = 0;
-        LOG.debug("Loaded auth_to_local catalog with {} primary rules", catalog.getPrimaryRuleCount());
+    synchronized void initializeFromProperties(Properties ingestorProperties) {
+        String rawAuthToLocalRules = ingestorProperties.getProperty(AuditServerConstants.PROP_AUTH_TO_LOCAL);
+        ruleCatalog = AuthToLocalRuleCatalog.parse(rawAuthToLocalRules);
+        lastAppliedRuleText              = null;
+        lastAppliedPartitionPlanVersion  = 0;
+        LOG.debug("Loaded auth_to_local catalog with {} primary rules", ruleCatalog.getPrimaryCatalogRuleCount());
     }
 
     /** Applies the full XML catalog (non-dynamic / startup fallback). */
     public void applyStaticRules() {
-        AuthToLocalRuleCatalog loaded = requireCatalog();
-        applyRules(loaded.composeFull(), 0);
+        AuthToLocalRuleCatalog loadedRuleCatalog = requireRuleCatalog();
+        applyKerberosNameRules(loadedRuleCatalog.composeFullCatalogRules(), 0);
     }
 
     /**
@@ -80,12 +80,12 @@ public final class AuthToLocalRuleComposer {
      * catalog so Kerberos mapping works before {@link PartitionPlanWatcher} bootstraps the registry.
      * When the topic already exists, defer to composed rules on {@link PartitionPlanHolder#install}.
      */
-    public void applyStartupRulesForDynamicMode(Properties props, String ingestorPropPrefix) {
-        if (!PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(props, ingestorPropPrefix)) {
+    public void applyStartupRulesForDynamicMode(Properties ingestorProperties, String ingestorPropertyPrefix) {
+        if (!PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(ingestorProperties, ingestorPropertyPrefix)) {
             return;
         }
-        requireCatalog();
-        if (isPlanTopicPresent(props, ingestorPropPrefix)) {
+        requireRuleCatalog();
+        if (isPartitionPlanTopicPresent(ingestorProperties, ingestorPropertyPrefix)) {
             LOG.info("Partition plan topic exists; auth_to_local rules will be composed from allowlisted short names on plan install");
         } else {
             applyStaticRules();
@@ -97,93 +97,95 @@ public final class AuthToLocalRuleComposer {
      * When dynamic partition-plan mode is enabled, compose rules from the union of allowlisted short
      * names and install them before audit REST authorization runs.
      */
-    public void applyForPlan(PartitionPlan plan) {
-        Properties props = AuditServerConfig.getInstance().getProperties();
-        if (!PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(props, PartitionPlanService.INGESTOR_PROP_PREFIX)) {
+    public void applyForPlan(PartitionPlan partitionPlan) {
+        Properties ingestorProperties = AuditServerConfig.getInstance().getProperties();
+        if (!PartitionPlanKafkaConfig.isDynamicPartitionPlanEnabled(ingestorProperties, PartitionPlanService.INGESTOR_PROP_PREFIX)) {
             return;
         }
-        if (plan == null) {
+        if (partitionPlan == null) {
             return;
         }
 
-        AuthToLocalRuleCatalog loaded = requireCatalog();
-        Set<String> activeShortNames = collectAllowedUserShortNames(plan);
-        String      rules            = loaded.compose(activeShortNames);
-        applyRules(rules, plan.getVersion());
-        LOG.info("Applied composed auth_to_local rules for plan version {} ({} active short names)", plan.getVersion(), activeShortNames.size());
+        AuthToLocalRuleCatalog loadedRuleCatalog = requireRuleCatalog();
+        Set<String> allowedUserShortNames = collectAllowedUserShortNames(partitionPlan);
+        String composedRuleText = loadedRuleCatalog.composeRulesForAllowedShortNames(allowedUserShortNames);
+        applyKerberosNameRules(composedRuleText, partitionPlan.getVersion());
+        LOG.info("Applied composed auth_to_local rules for plan version {} ({} active short names)",
+                partitionPlan.getVersion(), allowedUserShortNames.size());
     }
 
     /** Visible for tests — composes without applying Kerberos rules. */
-    String composeRulesForShortNames(Set<String> activeShortNames) {
-        return requireCatalog().compose(activeShortNames);
+    String composeKerberosRulesForAllowedShortNames(Set<String> allowedUserShortNames) {
+        return requireRuleCatalog().composeRulesForAllowedShortNames(allowedUserShortNames);
     }
 
     /** Clears cached apply state between unit tests. */
     public synchronized void resetForTests() {
-        lastAppliedRules             = null;
-        lastAppliedPlanVersion       = 0;
-        planTopicExistsOverrideForTests = null;
+        lastAppliedRuleText                     = null;
+        lastAppliedPartitionPlanVersion         = 0;
+        partitionPlanTopicExistsTestOverride    = null;
     }
 
     /** When non-null, overrides {@link AuditMessageQueueUtils#partitionPlanTopicExists} for unit tests. */
-    void setPlanTopicExistsOverrideForTests(Boolean exists) {
-        planTopicExistsOverrideForTests = exists;
+    void setPartitionPlanTopicExistsTestOverride(Boolean topicExists) {
+        partitionPlanTopicExistsTestOverride = topicExists;
     }
 
-    private boolean isPlanTopicPresent(Properties props, String ingestorPropPrefix) {
-        Boolean override = planTopicExistsOverrideForTests;
-        if (override != null) {
-            return override;
+    private boolean isPartitionPlanTopicPresent(Properties ingestorProperties, String ingestorPropertyPrefix) {
+        Boolean topicExistsOverride = partitionPlanTopicExistsTestOverride;
+        if (topicExistsOverride != null) {
+            return topicExistsOverride;
         }
-        return AuditMessageQueueUtils.partitionPlanTopicExists(props, ingestorPropPrefix);
+        return AuditMessageQueueUtils.partitionPlanTopicExists(ingestorProperties, ingestorPropertyPrefix);
     }
 
-    static Set<String> collectAllowedUserShortNames(PartitionPlan plan) {
-        Set<String> active = new LinkedHashSet<>();
-        if (plan == null || plan.getServices() == null) {
-            return active;
+    static Set<String> collectAllowedUserShortNames(PartitionPlan partitionPlan) {
+        Set<String> allowedUserShortNames = new LinkedHashSet<>();
+        if (partitionPlan == null || partitionPlan.getServices() == null) {
+            return allowedUserShortNames;
         }
-        for (Map.Entry<String, ServiceAllowlistEntry> entry : plan.getServices().entrySet()) {
-            ServiceAllowlistEntry allowlist = entry.getValue();
-            if (allowlist == null) {
+        for (Map.Entry<String, ServiceAllowlistEntry> serviceEntry : partitionPlan.getServices().entrySet()) {
+            ServiceAllowlistEntry allowlistEntry = serviceEntry.getValue();
+            if (allowlistEntry == null) {
                 continue;
             }
-            for (String user : allowlist.getAllowedUsers()) {
-                if (StringUtils.isNotBlank(user)) {
-                    active.add(user.trim());
+            for (String allowedUserShortName : allowlistEntry.getAllowedUsers()) {
+                if (StringUtils.isNotBlank(allowedUserShortName)) {
+                    allowedUserShortNames.add(allowedUserShortName.trim());
                 }
             }
         }
-        return active;
+        return allowedUserShortNames;
     }
 
-    private AuthToLocalRuleCatalog requireCatalog() {
-        AuthToLocalRuleCatalog loaded = catalog;
-        if (loaded == null) {
+    private AuthToLocalRuleCatalog requireRuleCatalog() {
+        AuthToLocalRuleCatalog loadedRuleCatalog = ruleCatalog;
+        if (loadedRuleCatalog == null) {
             initializeFromConfig();
-            loaded = catalog;
+            loadedRuleCatalog = ruleCatalog;
         }
-        if (loaded == null) {
+        if (loadedRuleCatalog == null) {
             throw new IllegalStateException("auth_to_local catalog is not loaded");
         }
-        return loaded;
+        return loadedRuleCatalog;
     }
 
-    private synchronized void applyRules(String rules, int planVersion) {
-        if (StringUtils.isBlank(rules)) {
+    private synchronized void applyKerberosNameRules(String composedRuleText, int partitionPlanVersion) {
+        if (StringUtils.isBlank(composedRuleText)) {
             LOG.warn("Skipping auth_to_local apply: composed rules are blank");
             return;
         }
-        if (rules.equals(lastAppliedRules) && planVersion == lastAppliedPlanVersion) {
+        if (composedRuleText.equals(lastAppliedRuleText) && partitionPlanVersion == lastAppliedPartitionPlanVersion) {
             return;
         }
         try {
-            KerberosName.setRules(rules);
-            lastAppliedRules       = rules;
-            lastAppliedPlanVersion = planVersion;
-            LOG.debug("KerberosName auth_to_local rules updated (planVersion={})", planVersion);
+            KerberosName.setRules(composedRuleText);
+            lastAppliedRuleText             = composedRuleText;
+            lastAppliedPartitionPlanVersion = partitionPlanVersion;
+            LOG.debug("KerberosName auth_to_local rules updated (partitionPlanVersion={})", partitionPlanVersion);
         } catch (Exception e) {
-            LOG.error("Failed to apply composed auth_to_local rules for plan version {}: {}", planVersion, e.getMessage(), e);
+            LOG.error("Failed to apply composed auth_to_local rules for plan version {}: {}",
+                    partitionPlanVersion, e.getMessage(), e);
         }
     }
 }

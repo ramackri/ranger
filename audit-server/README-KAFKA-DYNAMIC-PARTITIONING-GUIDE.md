@@ -137,8 +137,8 @@ Plugins not yet in the plan (or newly appearing in the fleet) go to **buffer** p
 |---|----------------|---------------------------|
 | **Where config lives** | XML on each pod at startup | `ranger_audit_partition_plan` (`plugins` + `services`) |
 | **Change allowlist or routing** | Edit XML + restart | `/api/audit/partition-plan` REST; no restart |
-| **Add new plugin/repo** | XML + restart | `POST .../onboard-repo` or promote + `services` update |
-| **Scale hot plugin** | Edit overrides + restart | `POST .../scale` (append-only tail partitions) |
+| **Add new plugin/repo** | XML + restart | `POST .../services` or promote + `services` update |
+| **Scale hot plugin** | Edit overrides + restart | `PATCH .../plugins/{pluginId}` (append-only tail partitions) |
 | **Multi-replica ingestor** | Same XML if synced via ConfigMap | All pods watch same Kafka document |
 | **Feature flag** | Default behavior | `ranger.audit.ingestor.kafka.partition.plan.dynamic.enabled=true` |
 
@@ -256,7 +256,7 @@ flowchart TB
 
   subgraph ingestor [Each audit-ingestor pod]
     Access["POST /api/audit/access"]
-    REST["GET/PUT/POST /partition-plan"]
+    REST["GET/PATCH/POST /partition-plan"]
     Svc[PartitionPlanService]
     Watcher[PartitionPlanWatcher]
     Mem[(In-memory PartitionPlan<br/>plugins + services)]
@@ -348,7 +348,7 @@ sequenceDiagram
   participant Mem as In-memory plan
   participant Part as Partition router
 
-  Admin->>REST: promote / scale / onboard-repo / PUT plan
+  Admin->>REST: POST /plugins or PATCH /plugins/{id} or POST /services or PATCH plan
   REST->>Plan: read current plan version
   REST->>Audit: createPartitions (if needed)
   REST->>Plan: write new plan version
@@ -384,16 +384,16 @@ When dynamic mode is on, operators change routing **and** allowlists through **`
 | Method | Path | Use when |
 |--------|------|----------|
 | `GET` | `/api/audit/partition-plan` | Read current document (`plugins`, `buffer`, `services`, `version`) |
-| `PUT` | `/api/audit/partition-plan` | Replace full document (advanced); optional `services` in body |
-| `POST` | `/api/audit/partition-plan/promote` | Promote plugin; optional `repo` + `allowedUsers` |
-| `POST` | `/api/audit/partition-plan/onboard-repo` | Upsert `services[repo]` + promote plugin (one version) |
-| `POST` | `/api/audit/partition-plan/scale` | Add tail partitions to existing plugin |
+| `PATCH` | `/api/audit/partition-plan` | Partial update — send only fields to change; omitted/empty fields inherit from current plan |
+| `POST` | `/api/audit/partition-plan/plugins` | Promote plugin from buffer; optional `repo` + `allowedUsers` |
+| `PATCH` | `/api/audit/partition-plan/plugins/{pluginId}` | Append tail partitions to an existing plugin |
+| `POST` | `/api/audit/partition-plan/services` | Upsert allowlist + promote plugin in one version |
 
 Base URL example: `https://<ingestor-host>:7081/api/audit/partition-plan`
 
 ### `expectedVersion` (all writes)
 
-Every `PUT` / `POST` must include the plan **version** you read from the last `GET`. If another admin changed the plan first, the server returns **409 Conflict** with the current plan — refresh and retry.
+Every `PATCH` / `POST` must include the plan **version** you read from the last `GET`. If another admin changed the plan first, the server returns **409 Conflict** with the current plan — refresh and retry.
 
 ### Common operations
 
@@ -404,12 +404,26 @@ GET /api/audit/partition-plan
 → 200 + JSON plan (note the "version" field)
 ```
 
-**Onboard repo** — allowlist + promote in one call:
+**Partial update (PATCH)** — update allowlist or add new plugins without sending the full plan:
 
 ```json
-POST /api/audit/partition-plan/onboard-repo
+PATCH /api/audit/partition-plan
 {
-  "repo": "dev_trino",
+  "expectedVersion": 4,
+  "services": {
+    "dev_kms": { "allowedUsers": ["rangerkms"] }
+  }
+}
+```
+
+Omitted fields inherit from the current plan. `plugins` merges **new plugin IDs only** (use `PATCH .../plugins/{pluginId}` to grow an existing plugin). `services` **upserts** allowlist entries by repo name.
+
+**Onboard service** — allowlist + promote in one call:
+
+```json
+POST /api/audit/partition-plan/services
+{
+  "serviceName": "dev_trino",
   "pluginId": "trino",
   "allowedUsers": ["trino"],
   "partitionCount": 3,
@@ -417,10 +431,10 @@ POST /api/audit/partition-plan/onboard-repo
 }
 ```
 
-**Promote** — e.g. onboard `trino` from buffer with 3 dedicated partitions (optional allowlist):
+**Promote plugin** — e.g. assign `trino` from buffer with 3 dedicated partitions (optional allowlist):
 
 ```json
-POST /api/audit/partition-plan/promote
+POST /api/audit/partition-plan/plugins
 {
   "pluginId": "trino",
   "partitionCount": 3,
@@ -428,19 +442,19 @@ POST /api/audit/partition-plan/promote
 }
 ```
 
-**Scale** — e.g. add 2 tail partitions to `hiveServer2`:
+**Scale plugin** — e.g. add 2 tail partitions to `hiveServer2`:
 
 ```json
-POST /api/audit/partition-plan/scale
+PATCH /api/audit/partition-plan/plugins/hiveServer2
 {
-  "pluginId": "hiveServer2",
   "additionalPartitions": 2,
   "expectedVersion": 5
 }
 ```
 
-Success → **200** + updated plan JSON (version incremented).  
-Invalid request (e.g. promote a plugin already dedicated) → **400**.  
+Success → **200** + updated plan JSON (version incremented on change).  
+Repeating the same onboard, promote, or PATCH delta (with matching `expectedVersion`) → **200** + current plan JSON with **no** registry write or version bump.  
+State conflict (resource exists but request differs, e.g. different partition count) → **400**.  
 Stale version → **409** + current plan in body.
 
 ### What happens inside one REST call
@@ -470,13 +484,13 @@ flowchart LR
 | 6 | Publish new plan version to Kafka |
 | 7 | Return updated plan JSON |
 
-**GET** is cheap (memory). **PUT / POST** always goes through Kafka so all pods converge on the same plan.
+**GET** is cheap (memory). **PATCH / POST** always goes through Kafka so all pods converge on the same plan.
 
 ---
 
 ## 7. Operator workflow: onboarding a plugin or repo
 
-**Recommended:** one `POST /partition-plan/onboard-repo` when you need **both** allowlist and dedicated partitions.
+**Recommended:** one `POST /partition-plan/services` when you need **both** allowlist and dedicated partitions.
 
 ### Stage 0 — Create service in Ranger Admin
 
@@ -486,7 +500,7 @@ flowchart LR
 ### Stage 1 — Onboard via unified registry
 
 ```http
-POST /api/audit/partition-plan/onboard-repo
+POST /api/audit/partition-plan/services
 ```
 
 All ingestors apply within ~30s. **No restart** required.
@@ -497,7 +511,7 @@ Expect **200/202** on `/access`, not **403**.
 
 ### Stage 3 — Scale (optional)
 
-Call `POST /api/audit/partition-plan/scale` for hot plugins.
+Call `PATCH /partition-plan/plugins/{pluginId}` for hot plugins.
 
 **Do not** edit `ranger-audit-ingestor-site.xml` on one pod for runtime changes. XML is only for **initial bootstrap** when the registry is empty.
 
@@ -514,12 +528,12 @@ Use when allowlist already exists and you only need routing changes.
 
 ### Stage 1 — Promote plugin
 
-- Call `POST /api/audit/partition-plan/promote` (see [§6](#6-admin-rest-api-control-plane)).
+- Call `POST /api/audit/partition-plan/plugins` (see [§6](#6-admin-rest-api-control-plane)).
 - All ingestors apply within ~30s. **No restart** required.
 
 ### Stage 2 — Scale a hot plugin
 
-- Call `POST /api/audit/partition-plan/scale`.
+- Call `PATCH /api/audit/partition-plan/plugins/{pluginId}`.
 - Dispatchers rebalance automatically when the audit topic grows.
 
 **Do not** edit `ranger-audit-ingestor-site.xml` on one pod for runtime changes. XML is only for **initial bootstrap** when the plan registry is empty.
@@ -695,22 +709,22 @@ Short names after `auth_to_local` — same values as `policy.download.auth.users
 | Symptom | Layer | Fix |
 |---------|-------|-----|
 | **401** on `/access` | Authentication | Plugin / ingestor Kerberos, keytabs, SPNEGO |
-| **403** on `/access` | **Service allowlist** | Add short name via `onboard-repo` or `PUT` `services` |
-| Audits accepted but wrong Kafka partition | **Partition plan** | `promote` / `scale` |
-| New repo in Admin, audits still **403** | Allowlist not onboarded | `POST .../onboard-repo` (partition plan alone is not enough) |
-| Allowlist OK, audits in buffer partition | Partition plan not onboarded | `promote` plugin (allowlist alone is not enough) |
+| **403** on `/access` | **Service allowlist** | Add short name via `POST .../services` or `PATCH` `services` |
+| Audits accepted but wrong Kafka partition | **Partition plan** | `POST .../plugins` / `PATCH .../plugins/{pluginId}` |
+| New repo in Admin, audits still **403** | Allowlist not onboarded | `POST .../services` (partition plan alone is not enough) |
+| Allowlist OK, audits in buffer partition | Partition plan not onboarded | `POST .../plugins` (allowlist alone is not enough) |
 
 **Plugin gets 403 but Kerberos works — what now?**  
 Short name not in `services[repo].allowedUsers`, wrong `serviceName`, or `auth_to_local` mismatch.
 
 **New repo in Admin UI, still 403?**  
-Creating the service in Admin does not auto-update ingestor (Phase 1). Call `POST /api/audit/partition-plan/onboard-repo`.
+Creating the service in Admin does not auto-update ingestor (Phase 1). Call `POST /api/audit/partition-plan/services`.
 
 **Do I need both allowlist and partition plan for a new plugin?**  
-Yes for full production onboarding. Use `onboard-repo` to update both in **one** plan version.
+Yes for full production onboarding. Use `POST /api/audit/partition-plan/services` to update both in **one** plan version.
 
 **Is there a bundled API?**  
-`POST /api/audit/partition-plan/onboard-repo` upserts `services[repo]` and promotes plugin partitions atomically.
+`POST /api/audit/partition-plan/services` upserts `services[repo]` and promotes plugin partitions atomically.
 
 ---
 

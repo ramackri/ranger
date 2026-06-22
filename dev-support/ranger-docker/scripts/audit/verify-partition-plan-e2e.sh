@@ -167,7 +167,7 @@ run_dynamic_tests() {
 
   echo ""
   echo "  Promote ${promote_plugin} (buffer plugin, not in configured.plugins)..."
-  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/promote" \
+  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/plugins" \
     "{\"pluginId\":\"${promote_plugin}\",\"partitionCount\":2,\"expectedVersion\":${version}}"
   if [[ "${HTTP_CODE}" == "200" ]]; then
     new_version="$(pp_json_field "${HTTP_BODY}" version)"
@@ -182,7 +182,7 @@ run_dynamic_tests() {
   fi
 
   echo "  Stale expectedVersion (409)..."
-  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/promote" \
+  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/plugins" \
     "{\"pluginId\":\"e2eStale409\",\"partitionCount\":2,\"expectedVersion\":1}"
   if [[ "${HTTP_CODE}" == "409" ]]; then
     pp_record_pass "stale expectedVersion -> 409"
@@ -191,7 +191,7 @@ run_dynamic_tests() {
   fi
 
   echo "  Promote hdfs again (400)..."
-  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/promote" \
+  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/plugins" \
     "{\"pluginId\":\"hdfs\",\"partitionCount\":2,\"expectedVersion\":${version}}"
   if [[ "${HTTP_CODE}" == "400" ]]; then
     pp_record_pass "duplicate hdfs promote -> 400"
@@ -200,8 +200,8 @@ run_dynamic_tests() {
   fi
 
   echo "  Scale ${promote_plugin}..."
-  pp_ingestor_request "${CONTAINER}" POST "${PLAN_URL}/scale" \
-    "{\"pluginId\":\"${promote_plugin}\",\"additionalPartitions\":1,\"expectedVersion\":${version}}"
+  pp_ingestor_request "${CONTAINER}" PATCH "${PLAN_URL}/plugins/${promote_plugin}" \
+    "{\"additionalPartitions\":1,\"expectedVersion\":${version}}"
   if [[ "${HTTP_CODE}" == "200" ]]; then
     new_version="$(pp_json_field "${HTTP_BODY}" version)"
     if [[ "${new_version}" -gt "${version}" ]]; then

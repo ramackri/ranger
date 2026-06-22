@@ -57,11 +57,6 @@ public final class KafkaPartitionPlanRegistry implements PartitionPlanRegistry {
         LOG.info("Kafka partition plan registry ready for topic '{}'", planTopic);
     }
 
-    @Override
-    public String getPlanTopicName() {
-        return planTopic;
-    }
-
     /** Reads the latest compacted value for the audit topic key from partition 0. */
     @Override
     public PartitionPlan readPlan(String auditTopicKey) {

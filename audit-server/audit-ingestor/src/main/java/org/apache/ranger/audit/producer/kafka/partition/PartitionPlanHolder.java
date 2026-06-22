@@ -73,12 +73,6 @@ public final class PartitionPlanHolder {
         return Collections.unmodifiableSet(new LinkedHashSet<>(entry.getAllowedUsers()));
     }
 
-    /** True when the loaded plan carries a non-empty service allowlist map. */
-    public boolean hasServiceAllowlist() {
-        PartitionPlan plan = planRef.get();
-        return plan != null && plan.getServices() != null && !plan.getServices().isEmpty();
-    }
-
     /** Clears holder state between unit tests. */
     public void resetForTests() {
         planRef.set(null);

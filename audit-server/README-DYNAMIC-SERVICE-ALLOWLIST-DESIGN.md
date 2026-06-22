@@ -114,7 +114,7 @@ This is the authorization gate on **`POST /api/audit/access`** — the high-volu
 | **Question** | *Which partition range in `ranger_audits` should plugin type / repo use?* |
 | **When applied** | **After** `/access` returns 200/202 and ingestor publishes to Kafka |
 | **Code path** | `AuditPartitioner` reads `PartitionPlanService` cache |
-| **Admin API** | `GET/PUT /api/audit/partition-plan` (ops only; Phase 6 admin allowlist) |
+| **Admin API** | `GET/PATCH /api/audit/partition-plan` (ops only; Phase 6 admin allowlist) |
 
 A plugin can have a valid partition range and still get **403** on `/access` if its short name is not in Surface 1. Conversely, Surface 1 can allow `hive` for `dev_hive` while partition plan still controls **where** those events land in Kafka.
 
@@ -123,7 +123,7 @@ A plugin can have a valid partition range and still get **403** on `/access` if 
 | Surface | Endpoint | Who | Allowlist property |
 |---------|----------|-----|-------------------|
 | **Service allowlist admin** (proposed) | `GET/PUT /api/audit/service-allowlist` | Ops | `service.allowlist.admin.users` |
-| **Partition plan admin** | `GET/PUT /api/audit/partition-plan` | Ops | `partition.plan.allowed.users` (Phase 6) |
+| **Partition plan admin** | `GET/PATCH /api/audit/partition-plan` | Ops | `partition.plan.allowed.users` (Phase 6) |
 
 Plugins must **not** call these. One combined “admin” list would let a daemon change routing or impersonate other repos.
 
@@ -155,7 +155,7 @@ flowchart TB
 
   subgraph ingestor [audit-ingestor]
     Access["POST /api/audit/access"]
-    Plan["GET/PUT /api/audit/partition-plan"]
+    Plan["GET/PATCH /api/audit/partition-plan"]
     Allow["GET/PUT /api/audit/service-allowlist proposed"]
 
     S1["Surface 1: service.repo.allowed.users"]
@@ -177,7 +177,7 @@ Dynamic partition plan changes only the **bottom** branch (Surface 2). Surface 1
 
 ### Principal matrix (intended separation)
 
-| Principal | `POST /access?serviceName=dev_hive` | `PUT /partition-plan` | `PUT /service-allowlist` |
+| Principal | `POST /access?serviceName=dev_hive` | `PATCH /partition-plan` | `PUT /service-allowlist` |
 |-----------|--------------------------------------|------------------------|---------------------------|
 | `hive` (plugin) | **200** if in `dev_hive.allowed.users` | **403** | **403** |
 | `admin` (ops) | **403** (not a plugin user) | **200** when Phase 6 live | **200** |
@@ -189,7 +189,7 @@ Dynamic partition plan changes only the **bottom** branch (Surface 2). Surface 1
 | **401** on `/access` | Authentication | Plugin / ingestor Kerberos, keytabs, SPNEGO |
 | **403** on `/access` | **Surface 1** — `allowed.users` | Add short name to `service.<repo>.allowed.users` (XML, REST, or Kafka allowlist topic) |
 | Audits accepted but wrong/missing Kafka partition | **Surface 2** — partition plan | Update partition plan registry / onboard plugin range |
-| **403** on `PUT /partition-plan` | **Surface 3** | Add principal to `partition.plan.allowed.users` |
+| **403** on `PATCH /partition-plan` | **Surface 3** | Add principal to `partition.plan.allowed.users` |
 | New repo in Admin UI, audits still 403 | **Surface 1 not onboarded** | Partition plan alone is insufficient — add allowlist entry for that repo |
 | New repo, allowlist OK, audits in buffer partition | **Surface 2 not onboarded** | Allowlist alone is insufficient — add partition plan entry |
 
@@ -225,7 +225,7 @@ Service allowlist and partition routing share **one** Kafka compacted topic and 
 | **Durable store** | Kafka compacted `ranger_audit_partition_plan` (`plugins`, `buffer`, `services`) |
 | **In-memory cache** | `PartitionPlanHolder` + `PartitionPlanWatcher` |
 | **Bootstrap** | Seed v1 from site XML (`configured.plugins` + `service.*.allowed.users`) when topic empty |
-| **Admin REST** | `GET/PUT/POST /api/audit/partition-plan` (+ `onboard-repo`) |
+| **Admin REST** | `GET/PATCH/POST /api/audit/partition-plan` (+ `POST .../services`) |
 | **Plugin authz path** | `AuditREST.isAllowedServiceUser()` reads `plan.services` when dynamic enabled |
 | **Routing path** | `AuditPartitioner` reads `plan.plugins` / `buffer` |
 | **AuthZ on REST** | `kafka.partition.plan.allowed.users` (when configured) |
@@ -328,20 +328,20 @@ AuditREST.isAllowedServiceUser(serviceName, authenticatedUser)
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/audit/partition-plan` | `partition.plan.allowed.users` | Return full plan (`plugins`, `buffer`, `services`, `version`) |
-| `PUT` | `/api/audit/partition-plan` | Admin | Replace plan; optional `services` map in body |
-| `POST` | `/api/audit/partition-plan/promote` | Admin | Promote plugin; optional `repo` + `allowedUsers` |
-| `POST` | `/api/audit/partition-plan/onboard-repo` | Admin | Upsert `services[repo]` + promote plugin (one version) |
-| `POST` | `/api/audit/partition-plan/scale` | Admin | Append tail partitions (routing only) |
+| `PATCH` | `/api/audit/partition-plan` | Admin | Partial update; optional `services` map in body |
+| `POST` | `/api/audit/partition-plan/plugins` | Admin | Promote plugin; optional `repo` + `allowedUsers` |
+| `POST` | `/api/audit/partition-plan/services` | Admin | Upsert `services[serviceName]` + promote plugin (one version) |
+| `PATCH` | `/api/audit/partition-plan/plugins/{pluginId}` | Admin | Append tail partitions (routing only) |
 
-**Onboard repo example:**
+**Onboard service example:**
 
 ```http
-POST /api/audit/partition-plan/onboard-repo
+POST /api/audit/partition-plan/services
 ```
 
 ```json
 {
-  "repo": "dev_trino",
+  "serviceName": "dev_trino",
   "pluginId": "trino",
   "allowedUsers": ["trino"],
   "partitionCount": 3,
@@ -365,7 +365,7 @@ On service create/update REST handler in `security-admin`:
 
 1. Read `policy.download.auth.users` for the service.
 2. Map Kerberos principals → short names (same rules as ingestor `auth_to_local`, or store short names only in service def).
-3. Call ingestor `POST /api/audit/partition-plan/onboard-repo` (internal HTTP, service account).
+3. Call ingestor `POST /api/audit/partition-plan/services` (internal HTTP, service account).
 
 **Pros:** Single source of truth in Policy Manager.  
 **Cons:** Requires Admin → ingestor coupling and credentials.

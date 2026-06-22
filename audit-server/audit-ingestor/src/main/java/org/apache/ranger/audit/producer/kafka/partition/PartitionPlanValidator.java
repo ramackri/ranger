@@ -32,7 +32,7 @@ import java.util.Map;
 import java.util.Set;
 
 /** Checks partition plan shape and append-only updates. */
-public final class PartitionPlanValidator {
+public class PartitionPlanValidator {
     private PartitionPlanValidator() {
     }
 

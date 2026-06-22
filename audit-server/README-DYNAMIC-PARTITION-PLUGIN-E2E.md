@@ -1,6 +1,6 @@
 # Dynamic partition plugin E2E
 
-End-to-end validation for **dynamic partition allocation**: onboard plugins via **`POST /api/audit/partition-plan/onboard-repo`**, then prove audits land on **assigned Kafka partitions** and pass **auth_to_local + allowlist** checks.
+End-to-end validation for **dynamic partition allocation**: onboard plugins via **`POST /api/audit/partition-plan/services`**, then prove audits land on **assigned Kafka partitions** and pass **auth_to_local + allowlist** checks.
 
 Built on:
 
@@ -14,7 +14,7 @@ Built on:
 
 For each plugin that has a **running** Docker container:
 
-1. **Onboard** — `POST /partition-plan/onboard-repo` with:
+1. **Onboard** — `POST /partition-plan/services` with:
    - `repo` (Policy Manager service name, e.g. `dev_kms`)
    - `pluginId` (Kafka record key / agent id, e.g. `kms`, `hiveServer2`)
    - `partitionCount` (dedicated partitions carved from buffer)
@@ -82,10 +82,10 @@ Full suite (core partition-plan + auth + plugin onboard):
 Sample site XML leaves `kafka.configured.plugins` **empty**:
 
 - First bootstrap → **buffer-only** plan sized by `kafka.topic.partitions` (default **10**)
-- Each `onboard-repo` promotes a plugin from buffer with `partitionCount` (default **2** in E2E specs)
+- Each `POST /services` promotes a plugin from buffer with `partitionCount` (default **2** in E2E specs)
 - `auth_to_local` rules compose from union of `services[].allowedUsers` (XML catalog + generated rules)
 
-## Onboard-repo example (manual)
+## Onboard service example (manual)
 
 ```bash
 # Inside ingestor container or any host with HTTP.keytab + FQDN
@@ -93,9 +93,9 @@ kinit -kt /etc/keytabs/HTTP.keytab HTTP/ranger-audit-ingestor.rangernw@EXAMPLE.C
 
 curl -s --negotiate -u : -X POST \
   -H 'Content-Type: application/json' \
-  'http://ranger-audit-ingestor.rangernw:7081/api/audit/partition-plan/onboard-repo' \
+  'http://ranger-audit-ingestor.rangernw:7081/api/audit/partition-plan/services' \
   -d '{
-    "repo": "dev_trino",
+    "serviceName": "dev_trino",
     "pluginId": "trino",
     "partitionCount": 2,
     "allowedUsers": ["trino"],

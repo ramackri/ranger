@@ -248,15 +248,16 @@ flowchart TB
 | Method | Purpose |
 |--------|---------|
 | `GET /api/audit/partition-plan` | Read current plan |
-| `PUT /api/audit/partition-plan` | Full plan replace (`expectedVersion` required) |
-| `POST .../promote` | Move plugin from buffer → dedicated partitions |
-| `POST .../scale` | Append tail partitions to existing plugin |
+| `PATCH /api/audit/partition-plan` | Partial plan update (`expectedVersion` required) |
+| `POST .../plugins` | Move plugin from buffer → dedicated partitions |
+| `PATCH .../plugins/{pluginId}` | Append tail partitions to existing plugin |
+| `POST .../services` | Upsert allowlist + promote plugin in one version |
 
 Mutations use **optimistic concurrency**: client sends `expectedVersion`; stale requests get **409** with current plan in the body. Client refreshes and retries.
 
 ```mermaid
 flowchart TD
-  Admin[Admin PUT / promote / scale] --> Auth[Authenticate]
+  Admin[Admin PATCH / POST plugins / services] --> Auth[Authenticate]
   Auth --> Load[Load plan vN]
   Load --> Check1{expectedVersion = N?}
   Check1 -->|No| R409a[409 + current plan]
@@ -357,9 +358,9 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> Buffer: Unknown plugin sends audits
-  Buffer --> Dedicated: Admin promote-plugin
-  Dedicated --> Scaled: Admin scale-plugin
-  Scaled --> Scaled: More scale-plugin calls
+  Buffer --> Dedicated: Admin POST .../plugins
+  Dedicated --> Scaled: Admin PATCH .../plugins/{pluginId}
+  Scaled --> Scaled: More PATCH .../plugins/{pluginId} calls
 
   note right of Buffer
     Routes to buffer partition pool

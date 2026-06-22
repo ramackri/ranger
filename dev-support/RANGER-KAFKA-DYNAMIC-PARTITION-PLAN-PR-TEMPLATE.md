@@ -152,7 +152,7 @@ sequenceDiagram
   participant Kafka as Kafka
   participant AP as AuditPartitioner
 
-  Admin->>REST: POST /partition-plan/promote or scale
+  Admin->>REST: POST /plugins or PATCH /plugins/{id} or POST /services
   REST->>PS: promotePlugin / scalePlugin
   PS->>Reg: readPlan + verify expectedVersion
   PS->>Grow: grow ranger_audits if plan needs new tail ids
@@ -366,7 +366,7 @@ New package: `org.apache.ranger.audit.producer.kafka.partition`
 |------|--------|
 | `AuditPartitioner.java` | Dynamic branch: `partitionFromPlan`, `nextRoundRobinIndex`, `boundPartitionToTopic` |
 | `AuditMessageQueue.java` | Ensure plan topic; start watcher; bootstrap when registry empty |
-| `AuditREST.java` | `GET/PUT /api/audit/partition-plan`, `POST .../promote`, `POST .../scale` |
+| `AuditREST.java` | `GET/PATCH /api/audit/partition-plan`, `POST .../plugins`, `PATCH .../plugins/{pluginId}`, `POST .../services` |
 | `AuditServerConfig.java` | Spring bean for `PartitionPlanService` |
 | `ranger-audit-ingestor-site.xml` | Commented dynamic plan property block (default off) |
 
@@ -405,9 +405,10 @@ Base path: `/api/audit` (same auth as other ingestor APIs).
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
 | `GET` | `/partition-plan` | — | In-memory plan on this pod |
-| `PUT` | `/partition-plan` | `PartitionPlanReplaceRequest` | Full replace; `expectedVersion` required |
-| `POST` | `/partition-plan/promote` | `PromotePluginRequest` | Move plugin from buffer to dedicated partitions |
-| `POST` | `/partition-plan/scale` | `ScalePluginRequest` | Append tail partitions to existing plugin |
+| `PATCH` | `/partition-plan` | `PartitionPlanReplacement` | Partial update; `expectedVersion` required |
+| `POST` | `/partition-plan/plugins` | `PromotePlugin` | Move plugin from buffer to dedicated partitions |
+| `PATCH` | `/partition-plan/plugins/{pluginId}` | `PluginScaleRequest` | Append tail partitions (`additionalPartitions` + `expectedVersion` only) |
+| `POST` | `/partition-plan/services` | `OnboardService` | Upsert allowlist + promote plugin in one version |
 
 | HTTP status | When |
 |-------------|------|
@@ -468,7 +469,7 @@ mvn verify -pl audit-server/audit-common,audit-server/audit-ingestor -Drat.skip=
 | `PartitionPlanBootstrapTest` | Initial plan matches static `AuditPartitioner` layout |
 | `PartitionPlanAllocatorTest` | Promote, scale, append-only tail growth |
 | `PartitionPlanValidatorTest` | Duplicate ids, count mismatch, illegal reshuffle |
-| `PartitionPlanServiceMutationTest` | PUT / promote / scale; **409** on stale `expectedVersion` |
+| `PartitionPlanServiceMutationTest` | PATCH / promote / scale; **409** on stale `expectedVersion` |
 | `PartitionPlanKafkaConfigTest` | Property resolution |
 | `PartitionPlanJsonTest` | JSON serde |
 | `AuditMessageQueueUtilsTest` | Admin client config helper |
@@ -532,16 +533,16 @@ Full narrative report: [README-KAFKA-PARTITION-PLAN-E2E-VALIDATION.md](../audit-
 
 | What we did | What we observed | Result |
 |-------------|------------------|--------|
-| `POST /api/audit/partition-plan/promote` — buffer plugin (e.g. `storm`), `partitionCount: 2`, correct `expectedVersion` | **200**; version incremented; `storm` in `plugins` | **Pass** |
+| `POST /api/audit/partition-plan/plugins` — buffer plugin (e.g. `storm`), `partitionCount: 2`, correct `expectedVersion` | **200**; version incremented; `storm` in `plugins` | **Pass** |
 | Same promote with stale `expectedVersion: 1` | **409 Conflict** | **Pass** |
-| `POST .../promote` for `hdfs` (already configured) | **400 Bad Request** | **Pass** |
-| `POST /api/audit/partition-plan/scale` — `storm`, `additionalPartitions: 1` | **200**; tail partition appended; `ranger_audits` grown if needed | **Pass** |
+| `POST .../plugins` for `hdfs` (already configured) | **400 Bad Request** | **Pass** |
+| `PATCH /api/audit/partition-plan/plugins/storm` — `additionalPartitions: 1` | **200**; tail partition appended; `ranger_audits` grown if needed | **Pass** |
 | `GET /partition-plan` again (no restart) | Same version and layout as last mutation | **Pass** |
 
 Example promote (lab — adjust host, auth, and `expectedVersion`):
 
 ```bash
-curl -sk -X POST "https://ranger-audit-ingestor.rangernw:7182/api/audit/partition-plan/promote" \
+curl -sk -X POST "https://ranger-audit-ingestor.rangernw:7182/api/audit/partition-plan/plugins" \
   -H "Content-Type: application/json" \
   --negotiate -u : \
   -d '{"pluginId":"storm","partitionCount":2,"expectedVersion":1}'

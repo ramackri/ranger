@@ -100,7 +100,7 @@ echo ""
 promote_plugin="$(pp_pick_buffer_promote_plugin "${CONTAINER}" "${PRIMARY_PLAN_URL}")"
 echo "Promote ${promote_plugin} on primary only (buffer plugin)..."
 promote_body="{\"pluginId\":\"${promote_plugin}\",\"partitionCount\":2,\"expectedVersion\":${v1}}"
-pp_ingestor_request "${CONTAINER}" POST "${PRIMARY_PLAN_URL}/promote" "${promote_body}"
+pp_ingestor_request "${CONTAINER}" POST "${PRIMARY_PLAN_URL}/plugins" "${promote_body}"
 new_v="$(pp_json_field "${HTTP_BODY}" version)"
 if [[ "${HTTP_CODE}" == "200" && "${new_v}" -gt "${v1}" ]]; then
   pp_record_pass "primary promote -> version ${new_v}"

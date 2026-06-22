@@ -361,7 +361,7 @@
             Empty (recommended greenfield):
               - Static mode: Kafka default hash partitioner using kafka.topic.partitions below.
               - Dynamic mode (kafka.partition.plan.dynamic.enabled=true): first bootstrap plan uses all
-                kafka.topic.partitions as buffer; onboard plugins via POST /api/audit/partition-plan/onboard-repo
+                kafka.topic.partitions as buffer; onboard plugins via POST /api/audit/partition-plan/services
                 or promote without editing this list.
 
             Non-empty (static / bootstrap seed):

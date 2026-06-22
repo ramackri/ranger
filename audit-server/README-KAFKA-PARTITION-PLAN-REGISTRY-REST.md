@@ -64,7 +64,7 @@ There are **two separate Kafka topics** and **two different jobs**:
 
 1. **Serve audits** — plugins POST `/access` → pick partition from **in-memory plan** → write to `ranger_audits` (fast; no Kafka read per audit).
 2. **Watch the plan** — background thread reads `ranger_audit_partition_plan` and updates memory when the plan changes.
-3. **Admin REST** — ops call `GET/PUT /api/audit/partition-plan` → update plan topic (+ grow `ranger_audits` if needed).
+3. **Admin REST** — ops call `GET/PATCH /api/audit/partition-plan` → update plan topic (+ grow `ranger_audits` if needed).
 
 Solr and HDFS dispatchers **never read the plan**. They read **all** partitions of `ranger_audits`.
 
@@ -126,7 +126,7 @@ flowchart TB
 
 | Step | What happens |
 |------|----------------|
-| 1 | Admin sends REST to **any** ingestor pod (`GET` to read, `PUT` / `promote-plugin` / `scale-plugin` to change). |
+| 1 | Admin sends REST to **any** ingestor pod (`GET` to read, `PATCH` / `POST .../plugins` / `PATCH .../plugins/{pluginId}` / `POST .../services` to change). |
 | 2 | That pod reads the current plan from **`ranger_audit_partition_plan`** (e.g. version 4). |
 | 3 | If more partitions are needed, pod grows **`ranger_audits`** via Kafka AdminClient. |
 | 4 | Pod writes the **new plan** (version 5) to the compacted topic. |
@@ -268,7 +268,7 @@ The dynamic partition plan is **design + README only** — the classes below mar
 | **`PartitionPlanWatcher`** | **Proposed** | New — background thread per pod |
 | **`AuditPartitioner`** | **Exists** (static XML) | `audit-ingestor/.../kafka/AuditPartitioner.java` |
 | **`AuditREST`** `/access` | **Exists** | `audit-ingestor/.../rest/AuditREST.java` |
-| **`AuditREST`** `/partition-plan` | **Proposed** | Same file — new `@GET` / `@PUT` / `@POST` methods |
+| **`AuditREST`** `/partition-plan` | **Proposed** | Same file — new `@GET` / `@PATCH` / `@POST` methods |
 | **`AuditMessageQueue`** | **Exists** | `audit-ingestor/.../kafka/AuditMessageQueue.java` |
 | **`AuditProducer`** | **Exists** | `audit-ingestor/.../kafka/AuditProducer.java` |
 | **Topic create + `createPartitions`** | **Exists** | `audit-common/.../AuditMessageQueueUtils.java` |
@@ -402,8 +402,8 @@ Topic creation and partition **increase** already exist — the proposed `Partit
 | Endpoint | Intended location |
 |----------|-------------------|
 | `GET /api/audit/partition-plan` | `AuditREST.java` or new resource class |
-| `PUT /api/audit/partition-plan` | `PartitionPlanService` |
-| `POST .../promote-plugin`, `.../scale-plugin` | `PartitionPlanService` |
+| `PATCH /api/audit/partition-plan` | `PartitionPlanService` |
+| `POST .../plugins`, `PATCH .../plugins/{pluginId}`, `POST .../services` | `PartitionPlanService` |
 
 ---
 
@@ -542,7 +542,7 @@ This section documents how plan **writes** and **reads** behave on `ranger_audit
 
 ### Does `writePlan` update the same record?
 
-**No — Kafka does not update records in place.** Each `writePlan` (REST PUT, bootstrap publish, promote/scale) **appends a new record** to partition 0:
+**No — Kafka does not update records in place.** Each `writePlan` (REST PATCH/POST, bootstrap publish, promote/scale) **appends a new record** to partition 0:
 
 ```text
 offset 10: key=ranger_audits  value=plan v1
@@ -591,7 +591,7 @@ Audit ingest throughput is **unaffected** — `AuditPartitioner` reads an in-mem
 
 | Situation | Risk | Mitigation |
 |-----------|------|------------|
-| Automation hammers PUT/promote/scale (many versions per minute) | Full scan reads more uncompacted records | Rate-limit ops; rely on compaction; Phase 3 watcher uses **incremental** consume |
+| Automation hammers PATCH/POST mutations (many versions per minute) | Full scan reads more uncompacted records | Rate-limit ops; rely on compaction; Phase 3 watcher uses **incremental** consume |
 | Compaction lag / misconfigured topic | Old versions accumulate on disk | Monitor compaction; set `min.compaction.lag.ms` if needed; verify `cleanup.policy=compact` |
 | Many independent audit topic keys on one partition | More keys × versions before compact | Unusual today; one key per deployment is the default design |
 | Using full `seekToBeginning` on every watcher poll (anti-pattern) | Unnecessary IO every 30s | Phase 3: consume **new offsets only** after initial load |
@@ -650,7 +650,7 @@ The compacted topic stores **one JSON document per audit topic key** — nothing
 | `plugins` | Map plugin id (`agentId`) → explicit partition ID list |
 | `buffer` | Partition IDs for unknown / unconfigured plugins |
 
-**Create or update:** only via **REST** (`PUT` / `promote-plugin` / `scale-plugin`) or **one-time bootstrap publish** when the topic is empty (see below). Producers and audit POST handlers **never** write to this topic.
+**Create or update:** only via **REST** (`PATCH` / `POST .../plugins` / `PATCH .../plugins/{pluginId}` / `POST .../services`) or **one-time bootstrap publish** when the topic is empty (see below). Producers and audit POST handlers **never** write to this topic.
 
 **Routing rules in `AuditPartitioner`:**
 
@@ -908,22 +908,22 @@ With a single-partition compacted topic and ~30s refresh, Kafka load from N inge
 
 Returns current plan from registry (or bootstrap-derived plan if topic empty).
 
-### PUT `/api/audit/partition-plan`
+### PATCH `/api/audit/partition-plan`
 
-Full plan replace with optimistic locking:
+Partial plan update with optimistic locking:
 
 ```json
 {
   "expectedVersion": 4,
-  "topicPartitionCount": 28,
-  "plugins": { ... },
-  "buffer": { "partitions": [ ... ] }
+  "services": {
+    "dev_trino": { "allowedUsers": ["trino"] }
+  }
 }
 ```
 
 Reject with `409 Conflict` if `expectedVersion` ≠ current (prevents lost updates).
 
-### POST `/api/audit/partition-plan/promote-plugin` (convenience)
+### POST `/api/audit/partition-plan/plugins`
 
 Move plugin from buffer → dedicated partitions (server-side allocation):
 
@@ -942,27 +942,30 @@ Server:
 3. Shrinks buffer list accordingly.
 4. Writes plan v5.
 
-### POST `/api/audit/partition-plan/scale-plugin` (convenience)
+### PATCH `/api/audit/partition-plan/plugins/{pluginId}`
 
-Add capacity to existing plugin (append-only):
+Add capacity to existing plugin (append-only). Body contains `additionalPartitions` and `expectedVersion` only:
 
 ```json
 {
-  "pluginId": "hiveServer2",
   "additionalPartitions": 2,
   "expectedVersion": 5
 }
 ```
 
-Server adds 2 new partition IDs from tail to hive’s list; increases audit topic if needed.
+Server adds 2 new partition IDs from tail to the plugin's list; increases audit topic if needed.
+
+### POST `/api/audit/partition-plan/services`
+
+Upsert allowlist entry and promote plugin in one version (see unified registry design doc).
 
 **Auth:** Kerberos/JWT + admin role (not the same as plugin audit POST users).
 
 ---
 
-## PUT handler flow (detailed)
+## PATCH handler flow (detailed)
 
-**Description:** Admin PUT on any ingestor pod. Grow `ranger_audits` **before** publishing plan that references new partition IDs. Server assigns `version = N+1`; client sends `expectedVersion` only.
+**Description:** Admin PATCH/POST on any ingestor pod. Grow `ranger_audits` **before** publishing plan that references new partition IDs. Server assigns `version = N+1`; client sends `expectedVersion` only.
 
 | Step | Action |
 |------|--------|
@@ -1028,8 +1031,8 @@ sequenceDiagram
 
   Note over PlanTopic: current version = 4
 
-  AdminA->>PodA: POST scale-plugin expectedVersion=4
-  AdminA->>PodB: POST promote-plugin expectedVersion=4
+  AdminA->>PodA: PATCH .../plugins/hiveServer2 expectedVersion=4
+  AdminA->>PodB: POST .../plugins expectedVersion=4
 
   PodA->>PlanTopic: read plan → v4
   PodB->>PlanTopic: read plan → v4
@@ -1048,7 +1051,7 @@ sequenceDiagram
 
   Note over AdminA: retry with expectedVersion=5
 
-  AdminA->>PodB: POST promote-plugin expectedVersion=5
+  AdminA->>PodB: POST .../plugins expectedVersion=5
   PodB->>PlanTopic: read v5 → allocate → produce v6
   PodB-->>AdminA: 200 OK plan v6
 ```
@@ -1101,7 +1104,7 @@ No silent split-brain — one plan version in registry; loser retries with `expe
 
 | Approach | When to use |
 |----------|-------------|
-| **K8s Lease** (`partition-plan-writer`) | Only the lease holder executes PUT/promote/scale; other pods return **503 Retry on leader** or proxy internally |
+| **K8s Lease** (`partition-plan-writer`) | Only the lease holder executes PATCH/POST mutations; other pods return **503 Retry on leader** or proxy internally |
 | **Single admin job / CI** | Human or pipeline serializes changes — sufficient for many ops teams |
 | **Dedicated single-replica “admin” ingestor** | Extreme isolation; usually unnecessary |
 
@@ -1191,7 +1194,7 @@ Topic: **15** partitions.
 
 **Unknown plugin `trino` sends audits** → routes to buffer (hash among [6..14]).
 
-**Admin: POST promote-plugin trino, count=3**
+**Admin: POST .../plugins trino, count=3**
 
 1. Allocator takes IDs [6,7,8] from buffer (or adds tail if buffer policy prefers grow-first).
 2. buffer becomes [9..14].
@@ -1199,7 +1202,7 @@ Topic: **15** partitions.
 4. All ingestors pick up v2 within refresh interval.
 5. **No ingestor restart.**
 
-**Later: POST scale-plugin hiveServer2, additionalPartitions=3**
+**Later: PATCH .../plugins/hiveServer2, additionalPartitions=3**
 
 1. Increase topic 15 → 18 if needed.
 2. Append partition IDs [15,16,17] to hiveServer2 list (append-only — hdfs and trino lists unchanged).
@@ -1386,7 +1389,7 @@ Existing `configured.plugins` / overrides remain **bootstrap** when the compacte
 | 2 | Registry read/write + `createPlanTopicIfNotExists` (Race A) |
 | 3 | Plan-aware `AuditPartitioner` + watcher + bootstrap (Race B) |
 | 4 | REST GET (inspect plan) |
-| 5 | REST PUT / promote / scale + AdminClient |
+| 5 | REST PATCH / POST plugins / services + AdminClient |
 | 6 | AuthZ + `/status` (`plan.version`, watcher timestamp) |
 | 7 | Ops runbook — REST only when dynamic=true → [README-KAFKA-PARTITION-PLAN-OPS-RUNBOOK.md](README-KAFKA-PARTITION-PLAN-OPS-RUNBOOK.md) |
 | 8 | Migrate deployments — publish v1 from current XML |

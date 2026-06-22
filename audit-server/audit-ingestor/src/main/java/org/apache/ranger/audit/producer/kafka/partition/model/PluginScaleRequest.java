@@ -19,43 +19,28 @@
 
 package org.apache.ranger.audit.producer.kafka.partition.model;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.Collections;
-import java.util.List;
+import java.io.Serializable;
 
-/** POST /api/audit/partition-plan/onboard-repo body. */
-public final class OnboardRepoRequest {
-    private final String repo;
-    private final String pluginId;
-    private final int partitionCount;
-    private final List<String> allowedUsers;
+@JsonAutoDetect(getterVisibility = Visibility.NONE, setterVisibility = Visibility.NONE, fieldVisibility = Visibility.ANY)
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class PluginScaleRequest implements Serializable {
+    private final int additionalPartitions;
     private final int expectedVersion;
 
     @JsonCreator
-    public OnboardRepoRequest(@JsonProperty("repo") String repo, @JsonProperty("pluginId") String pluginId, @JsonProperty("partitionCount") int partitionCount, @JsonProperty("allowedUsers") List<String> allowedUsers, @JsonProperty("expectedVersion") int expectedVersion) {
-        this.repo             = repo;
-        this.pluginId         = pluginId;
-        this.partitionCount   = partitionCount;
-        this.allowedUsers     = allowedUsers == null ? Collections.emptyList() : List.copyOf(allowedUsers);
-        this.expectedVersion  = expectedVersion;
+    public PluginScaleRequest(@JsonProperty("additionalPartitions") int additionalPartitions, @JsonProperty("expectedVersion") int expectedVersion) {
+        this.additionalPartitions = additionalPartitions;
+        this.expectedVersion      = expectedVersion;
     }
 
-    public String getRepo() {
-        return repo;
-    }
-
-    public String getPluginId() {
-        return pluginId;
-    }
-
-    public int getPartitionCount() {
-        return partitionCount;
-    }
-
-    public List<String> getAllowedUsers() {
-        return allowedUsers;
+    public int getAdditionalPartitions() {
+        return additionalPartitions;
     }
 
     public int getExpectedVersion() {

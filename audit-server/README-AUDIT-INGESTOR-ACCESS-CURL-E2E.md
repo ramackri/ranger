@@ -7,7 +7,7 @@ End-to-end validation for **dynamic `auth_to_local` rule composition** and **per
 1. **Kerberos SPNEGO** on `POST /api/audit/access` from each plugin container
 2. **`auth_to_local`** maps the plugin principal → short name (`hdfs`, `hive`, `rangerkms`, …)
 3. **`services[repo].allowedUsers`** in the partition-plan registry authorizes the short name
-4. **Dynamic updates** via `PUT /partition-plan` or `POST /partition-plan/onboard-repo` refresh composed rules and allowlist without restart
+4. **Dynamic updates** via delta `PATCH /partition-plan` (services allowlist) or `POST /partition-plan/services` refresh composed rules without restart
 
 ## Quick start (Docker Tier 3)
 
@@ -40,7 +40,7 @@ Generate curl cookbook only (no Docker required):
 |----------|-----|------|
 | Health | `http://localhost:7081/api/audit/health` | None |
 | Partition plan | `http://ranger-audit-ingestor.rangernw:7081/api/audit/partition-plan` | SPNEGO (HTTP service keytab) |
-| Onboard repo | `…/api/audit/partition-plan/onboard-repo` | SPNEGO |
+| Onboard service | `…/api/audit/partition-plan/services` | SPNEGO |
 | **Post audits** | `…/api/audit/access?serviceName=<repo>&appId=<pluginId>` | SPNEGO (plugin keytab) |
 
 **Important:** SPNEGO curl must use the **FQDN** host (`ranger-audit-ingestor.rangernw`), not `localhost`, when run inside Docker.
@@ -122,9 +122,9 @@ curl -s -w '\nHTTP %{http_code}\n' --negotiate -u : -X POST \
 kinit -kt /etc/keytabs/HTTP.keytab HTTP/ranger-audit-ingestor.rangernw@EXAMPLE.COM
 
 curl -s --negotiate -u : -X POST -H 'Content-Type: application/json' \
-  'http://ranger-audit-ingestor.rangernw:7081/api/audit/partition-plan/onboard-repo' \
+  'http://ranger-audit-ingestor.rangernw:7081/api/audit/partition-plan/services' \
   -d '{
-    "repo": "dev_trino",
+    "serviceName": "dev_trino",
     "pluginId": "trino",
     "partitionCount": 3,
     "allowedUsers": ["trino"],
@@ -138,17 +138,14 @@ After install, ingestor logs:
 Applied composed auth_to_local rules for plan version N (M active short names)
 ```
 
-### Option B — update allowlist only (PUT full plan)
+### Option B — update allowlist only (PATCH partial plan)
 
 ```bash
-# GET current plan, set services[dev_kms].allowedUsers, bump expectedVersion
-curl -s --negotiate -u : -X PUT -H 'Content-Type: application/json' \
+# GET current plan version, then PATCH only the services entry to change
+curl -s --negotiate -u : -X PATCH -H 'Content-Type: application/json' \
   'http://ranger-audit-ingestor.rangernw:7081/api/audit/partition-plan' \
   -d '{
     "expectedVersion": 2,
-    "topicPartitionCount": 48,
-    "plugins": { "...": "..." },
-    "buffer": { "partitions": [45,46,47] },
     "services": {
       "dev_kms": { "allowedUsers": ["rangerkms"] }
     }
@@ -162,7 +159,7 @@ curl -s --negotiate -u : -X PUT -H 'Content-Type: application/json' \
 1. **Per-plugin POST** — each running plugin container posts audits → 200 + correct `authenticatedUser`
 2. **Allowlist toggle** — clear `dev_kms` users → 403; restore → 200
 3. **Cross-repo denial** — HDFS principal posting to `dev_kms` → 403
-4. **onboard-repo** — new synthetic repo + buffer plugin; HDFS principal → 200
+4. **POST /services** — new synthetic repo + buffer plugin; HDFS principal → 200
 
 Options:
 

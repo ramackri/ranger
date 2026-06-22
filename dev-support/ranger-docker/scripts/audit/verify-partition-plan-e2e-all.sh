@@ -95,7 +95,7 @@ if [[ "${WITH_AUTH_ACCESS}" == "true" ]]; then
 fi
 
 if [[ "${WITH_PLUGIN_ONBOARD}" == "true" ]]; then
-  run_step "Dynamic partition onboard-repo + Kafka routing E2E" \
+  run_step "Dynamic partition POST /services + Kafka routing E2E" \
     ./scripts/audit/verify-dynamic-partition-plugin-e2e.sh --no-enable
 fi
 

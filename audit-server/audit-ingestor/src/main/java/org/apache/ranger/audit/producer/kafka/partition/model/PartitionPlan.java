@@ -19,9 +19,12 @@
 
 package org.apache.ranger.audit.producer.kafka.partition.model;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.io.Serializable;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanValidator;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
 import org.apache.ranger.audit.provider.MiscUtil;
@@ -31,9 +34,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Immutable partition routing plan stored in the Kafka compacted registry topic. */
+@JsonAutoDetect(getterVisibility = Visibility.NONE, setterVisibility = Visibility.NONE, fieldVisibility = Visibility.ANY)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public final class PartitionPlan {
+public class PartitionPlan implements Serializable {
     private final String topic;
     private final int version;
     private final int topicPartitionCount;
@@ -101,6 +104,18 @@ public final class PartitionPlan {
         return services;
     }
 
+    /** Compares routing payload; ignores version, updatedAt, and updatedBy. */
+    public boolean sameContentAs(PartitionPlan other) {
+        if (other == null) {
+            return false;
+        }
+        return topicPartitionCount == other.topicPartitionCount
+                && Objects.equals(topic, other.topic)
+                && Objects.equals(plugins, other.plugins)
+                && Objects.equals(buffer, other.buffer)
+                && Objects.equals(services, other.services);
+    }
+
     public Builder toBuilder() {
         return new Builder(this);
     }
@@ -132,15 +147,22 @@ public final class PartitionPlan {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) {
+    public boolean equals(Object other) {
+        if (this == other) {
             return true;
         }
-        if (o == null || getClass() != o.getClass()) {
+        if (other == null || getClass() != other.getClass()) {
             return false;
         }
-        PartitionPlan that = (PartitionPlan) o;
-        return version == that.version && topicPartitionCount == that.topicPartitionCount && Objects.equals(topic, that.topic) && Objects.equals(updatedAt, that.updatedAt) && Objects.equals(updatedBy, that.updatedBy) && Objects.equals(plugins, that.plugins) && Objects.equals(buffer, that.buffer) && Objects.equals(services, that.services);
+        PartitionPlan otherPartitionPlan = (PartitionPlan) other;
+        return version == otherPartitionPlan.version
+                && topicPartitionCount == otherPartitionPlan.topicPartitionCount
+                && Objects.equals(topic, otherPartitionPlan.topic)
+                && Objects.equals(updatedAt, otherPartitionPlan.updatedAt)
+                && Objects.equals(updatedBy, otherPartitionPlan.updatedBy)
+                && Objects.equals(plugins, otherPartitionPlan.plugins)
+                && Objects.equals(buffer, otherPartitionPlan.buffer)
+                && Objects.equals(services, otherPartitionPlan.services);
     }
 
     @Override
@@ -219,11 +241,6 @@ public final class PartitionPlan {
 
         public Builder services(Map<String, ServiceAllowlistEntry> services) {
             this.services = services == null ? new LinkedHashMap<>() : new LinkedHashMap<>(services);
-            return this;
-        }
-
-        public Builder putService(String repo, ServiceAllowlistEntry entry) {
-            this.services.put(repo, entry);
             return this;
         }
 

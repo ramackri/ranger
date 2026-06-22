@@ -343,10 +343,11 @@ Reuse/extend existing logic in `AuditMessageQueueUtils` (already increases parti
 Add an admin-only API (authenticated, not public like `/health`), e.g.:
 
 ```text
-PUT /api/audit/partition-plan
+PATCH /api/audit/partition-plan
 GET /api/audit/partition-plan
-POST /api/audit/partition-plan/promote-plugin   (optional convenience)
-POST /api/audit/partition-plan/scale-plugin     (optional convenience)
+POST /api/audit/partition-plan/plugins
+PATCH /api/audit/partition-plan/plugins/{pluginId}
+POST /api/audit/partition-plan/services
 ```
 
 **Handler flow (single transactional intent):**
@@ -440,7 +441,7 @@ Dynamic partitioning is **not** viable without a shared registry (Kafka compacte
 2. **Kafka registry**: compacted topic create + read/write helpers.
 3. **`AuditPartitioner`**: `AtomicReference` + plan-based routing (XML bootstrap only when plan topic is empty).
 4. **`PartitionPlanWatcher`**: background refresh on all ingestor pods.
-5. **`AuditREST` admin endpoints**: promote/scale plugin → AdminClient + registry write.
+5. **`AuditREST` admin endpoints**: POST/PATCH plugins + POST services → AdminClient + registry write.
 6. **AuthZ** on admin endpoints (same pattern as `/access` allowed-users).
 7. **Metrics/logging**: expose current `plan.version` on `/status`.
 8. **Ops runbook**: [README-KAFKA-PARTITION-PLAN-OPS-RUNBOOK.md](README-KAFKA-PARTITION-PLAN-OPS-RUNBOOK.md) — REST workflow, 409 retry, sample XML.

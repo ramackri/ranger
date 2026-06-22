@@ -35,63 +35,76 @@ import static org.apache.ranger.audit.server.AuditServerConstants.PROP_SUFFIX_AL
 
 /** Loads service allowlist entries from ingestor site XML for registry bootstrap and brownfield merge. */
 public final class ServiceAllowlistBootstrap {
-    private static final String BOOTSTRAP_SOURCE = "xml-bootstrap";
+    private static final String ALLOWLIST_SOURCE_SITE_XML = "xml-bootstrap";
 
     private ServiceAllowlistBootstrap() {
     }
 
-  /** Scans {@code ranger.audit.ingestor.service.<repo>.allowed.users} properties. */
-    public static Map<String, ServiceAllowlistEntry> loadFromProperties(Properties props) {
-        Map<String, ServiceAllowlistEntry> services = new LinkedHashMap<>();
-        if (props == null) {
-            return services;
+    /** Scans {@code ranger.audit.ingestor.service.<repo>.allowed.users} properties. */
+    public static Map<String, ServiceAllowlistEntry> loadAllowlistsFromProperties(Properties ingestorProperties) {
+        Map<String, ServiceAllowlistEntry> allowlistEntriesByRepo = new LinkedHashMap<>();
+        if (ingestorProperties == null) {
+            return allowlistEntriesByRepo;
         }
-        for (String key : props.stringPropertyNames()) {
-            if (!key.startsWith(PROP_PREFIX_AUDIT_SERVER_SERVICE) || !key.endsWith(PROP_SUFFIX_ALLOWED_USERS)) {
+        for (String propertyName : ingestorProperties.stringPropertyNames()) {
+            if (!propertyName.startsWith(PROP_PREFIX_AUDIT_SERVER_SERVICE)
+                    || !propertyName.endsWith(PROP_SUFFIX_ALLOWED_USERS)) {
                 continue;
             }
-            String repo = key.substring(PROP_PREFIX_AUDIT_SERVER_SERVICE.length(), key.length() - PROP_SUFFIX_ALLOWED_USERS.length());
-            if (StringUtils.isBlank(repo)) {
+            String serviceRepoName = propertyName.substring(
+                    PROP_PREFIX_AUDIT_SERVER_SERVICE.length(),
+                    propertyName.length() - PROP_SUFFIX_ALLOWED_USERS.length());
+            if (StringUtils.isBlank(serviceRepoName)) {
                 continue;
             }
-            String value = props.getProperty(key);
-            if (StringUtils.isBlank(value)) {
+            String allowedUsersPropertyValue = ingestorProperties.getProperty(propertyName);
+            if (StringUtils.isBlank(allowedUsersPropertyValue)) {
                 continue;
             }
-            List<String> users = new ArrayList<>();
-            for (String part : value.split(",")) {
-                if (part != null) {
-                    String trimmed = part.trim();
-                    if (StringUtils.isNotBlank(trimmed)) {
-                        users.add(trimmed);
-                    }
-                }
-            }
-            if (users.isEmpty()) {
+            List<String> allowedUserShortNames = parseAllowedUserShortNames(allowedUsersPropertyValue);
+            if (allowedUserShortNames.isEmpty()) {
                 continue;
             }
-            services.put(repo.trim(), new ServiceAllowlistEntry(users, BOOTSTRAP_SOURCE, null));
+            allowlistEntriesByRepo.put(
+                    serviceRepoName.trim(),
+                    new ServiceAllowlistEntry(allowedUserShortNames, ALLOWLIST_SOURCE_SITE_XML, null));
         }
-        return services;
+        return allowlistEntriesByRepo;
     }
 
     /** Loads allowlist entries from the running ingestor configuration singleton. */
-    public static Map<String, ServiceAllowlistEntry> loadFromAuditServerConfig() {
-        return loadFromProperties(AuditServerConfig.getInstance().getProperties());
+    public static Map<String, ServiceAllowlistEntry> loadAllowlistsFromServerConfig() {
+        return loadAllowlistsFromProperties(AuditServerConfig.getInstance().getProperties());
     }
 
     /**
      * Brownfield helper: when the Kafka plan has no {@code services} block, merge XML entries in memory only
      * (does not bump version or write to Kafka).
      */
-    public static PartitionPlan enrichServicesFromXmlIfMissing(PartitionPlan plan, Properties props) {
-        if (plan == null || (plan.getServices() != null && !plan.getServices().isEmpty())) {
-            return plan;
+    public static PartitionPlan mergeSiteXmlAllowlistsWhenPlanServicesMissing(
+            PartitionPlan partitionPlan, Properties ingestorProperties) {
+        if (partitionPlan == null
+                || (partitionPlan.getServices() != null && !partitionPlan.getServices().isEmpty())) {
+            return partitionPlan;
         }
-        Map<String, ServiceAllowlistEntry> fromXml = loadFromProperties(props);
-        if (fromXml.isEmpty()) {
-            return plan;
+        Map<String, ServiceAllowlistEntry> siteXmlAllowlistEntries =
+                loadAllowlistsFromProperties(ingestorProperties);
+        if (siteXmlAllowlistEntries.isEmpty()) {
+            return partitionPlan;
         }
-        return plan.toBuilder().services(fromXml).build();
+        return partitionPlan.toBuilder().services(siteXmlAllowlistEntries).build();
+    }
+
+    private static List<String> parseAllowedUserShortNames(String allowedUsersPropertyValue) {
+        List<String> allowedUserShortNames = new ArrayList<>();
+        for (String userToken : allowedUsersPropertyValue.split(",")) {
+            if (userToken != null) {
+                String trimmedShortName = userToken.trim();
+                if (StringUtils.isNotBlank(trimmedShortName)) {
+                    allowedUserShortNames.add(trimmedShortName);
+                }
+            }
+        }
+        return allowedUserShortNames;
     }
 }

@@ -30,7 +30,7 @@ export RANGER_DB_TYPE=postgres
 
 Or in one step after the stack is up: `./setup-audit-e2e.sh verify-full`
 
-**Dynamic partition allocation** (onboard-repo REST, Kafka routing, auth_to_local) runs on the same Docker stack but is a separate script suite — see [../../audit-server/README-DYNAMIC-PARTITION-PLUGIN-E2E.md](../../audit-server/README-DYNAMIC-PARTITION-PLUGIN-E2E.md). After plugin pipelines pass, optionally append:
+**Dynamic partition allocation** (POST `/partition-plan/services` REST, Kafka routing, auth_to_local) runs on the same Docker stack but is a separate script suite — see [../../audit-server/README-DYNAMIC-PARTITION-PLUGIN-E2E.md](../../audit-server/README-DYNAMIC-PARTITION-PLUGIN-E2E.md). After plugin pipelines pass, optionally append:
 
 ```bash
 ./scripts/audit/verify-audit-e2e-full.sh --with-dynamic-partition --with-auth-access

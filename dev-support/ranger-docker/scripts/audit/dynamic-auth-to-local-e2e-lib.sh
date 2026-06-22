@@ -20,7 +20,7 @@
 DAEL_INGESTOR_HOST="${CONTAINER}.rangernw"
 DAEL_INGESTOR_HTTP_PORT="${INGESTOR_HTTP_PORT:-7081}"
 DAEL_ACCESS_PATH="/api/audit/access"
-DAEL_ONBOARD_PATH="/api/audit/partition-plan/onboard-repo"
+DAEL_ONBOARD_PATH="/api/audit/partition-plan/services"
 DAEL_ACCESS_CODE=""
 DAEL_ACCESS_BODY=""
 
@@ -109,34 +109,33 @@ dael_json_authenticated_user() {
   printf '%s' "${DAEL_ACCESS_BODY}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('authenticatedUser',''))" 2>/dev/null || echo ""
 }
 
-dael_plan_put_body_with_allowed_users() {
+dael_plan_patch_body_with_allowed_users() {
   local plan_json="$1"
   local repo="$2"
   local users_csv="$3"
   printf '%s' "${plan_json}" | python3 -c \
     "import sys,json; plan=json.load(sys.stdin); repo, users=sys.argv[1], [u.strip() for u in sys.argv[2].split(',') if u.strip()]; \
-body={'expectedVersion': plan['version'], 'topicPartitionCount': plan['topicPartitionCount'], 'plugins': plan['plugins'], 'buffer': plan['buffer']}; \
-body['services'] = plan.get('services') or {}; body['services'][repo] = {'allowedUsers': users}; print(json.dumps(body))" "${repo}" "${users_csv}"
+body={'expectedVersion': plan['version'], 'services': {repo: {'allowedUsers': users}}}; print(json.dumps(body))" "${repo}" "${users_csv}"
 }
 
-dael_put_allowed_users() {
+dael_patch_allowed_users() {
   local repo="$1"
   local users_csv="$2"
-  local put_url
-  local put_body
+  local patch_url
+  local patch_body
 
-  put_url="$(pp_ingestor_plan_url "${CONTAINER}")"
-  pp_ingestor_request "${CONTAINER}" GET "${put_url}"
+  patch_url="$(pp_ingestor_plan_url "${CONTAINER}")"
+  pp_ingestor_request "${CONTAINER}" GET "${patch_url}"
   if [[ "${HTTP_CODE}" != "200" ]]; then
-    pp_record_fail "GET plan before PUT allowedUsers for ${repo}: ${HTTP_CODE}"
+    pp_record_fail "GET plan before PATCH allowedUsers for ${repo}: ${HTTP_CODE}"
     return 1
   fi
-  put_body="$(dael_plan_put_body_with_allowed_users "${HTTP_BODY}" "${repo}" "${users_csv}")"
-  pp_ingestor_request "${CONTAINER}" PUT "${put_url}" "${put_body}"
+  patch_body="$(dael_plan_patch_body_with_allowed_users "${HTTP_BODY}" "${repo}" "${users_csv}")"
+  pp_ingestor_request "${CONTAINER}" PATCH "${patch_url}" "${patch_body}"
   if [[ "${HTTP_CODE}" == "200" ]]; then
     return 0
   fi
-  pp_record_fail "PUT allowedUsers for ${repo} failed: HTTP ${HTTP_CODE} ${HTTP_BODY}"
+  pp_record_fail "PATCH allowedUsers for ${repo} failed: HTTP ${HTTP_CODE} ${HTTP_BODY}"
   return 1
 }
 
@@ -148,10 +147,10 @@ dael_onboard_repo() {
   local version="$5"
   local url body
 
-  url="http://$(pp_ingestor_host "${CONTAINER}"):${INGESTOR_HTTP_PORT}/api/audit/partition-plan/onboard-repo"
+  url="http://$(pp_ingestor_host "${CONTAINER}"):${INGESTOR_HTTP_PORT}/api/audit/partition-plan/services"
   body="$(python3 -c \
     'import json,sys; repo,plugin,part,user,ver=sys.argv[1:6]; \
-print(json.dumps({"repo":repo,"pluginId":plugin,"partitionCount":int(part),"allowedUsers":[user],"expectedVersion":int(ver)}))' \
+print(json.dumps({"serviceName":repo,"pluginId":plugin,"partitionCount":int(part),"allowedUsers":[user],"expectedVersion":int(ver)}))' \
     "${repo}" "${plugin_id}" "${partition_count}" "${short_name}" "${version}")"
   pp_ingestor_request "${CONTAINER}" POST "${url}" "${body}"
   [[ "${HTTP_CODE}" == "200" ]]
@@ -174,7 +173,7 @@ dael_write_curl_cookbook() {
   local out_file="$1"
   local access_url onboard_url
   access_url="$(dael_ingestor_access_url)"
-  onboard_url="http://${DAEL_INGESTOR_HOST}:${DAEL_INGESTOR_HTTP_PORT}/api/audit/partition-plan/onboard-repo"
+  onboard_url="http://${DAEL_INGESTOR_HOST}:${DAEL_INGESTOR_HTTP_PORT}/api/audit/partition-plan/services"
 
   {
     echo "# Ranger audit ingestor access E2E — curl cookbook"
@@ -249,7 +248,7 @@ dael_test_dynamic_user_toggle() {
   echo ""
   echo "  Dynamic allowlist toggle for ${repo}..."
 
-  if ! dael_put_allowed_users "${repo}" "wronguser-not-allowed"; then
+  if ! dael_patch_allowed_users "${repo}" "wronguser-not-allowed"; then
     return 1
   fi
   if dael_wait_auth_to_local_applied "${CONTAINER}" 30; then
@@ -261,7 +260,7 @@ dael_test_dynamic_user_toggle() {
   dael_access_post_from_container "${src_container}" "${keytab}" "${principal}" "${repo}" "${app_id}"
   dael_expect_access "${repo} denied when user not in allowlist" "403" || return 1
 
-  if ! dael_put_allowed_users "${repo}" "${short_name}"; then
+  if ! dael_patch_allowed_users "${repo}" "${short_name}"; then
     return 1
   fi
   if dael_wait_auth_to_local_applied "${CONTAINER}" 30; then

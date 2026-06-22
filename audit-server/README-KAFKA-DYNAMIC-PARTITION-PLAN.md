@@ -126,15 +126,15 @@ Base: `https://<ingestor-host>:<port>/api/audit`
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/partition-plan` | Read in-memory plan on this pod |
-| `PUT` | `/partition-plan` | Replace full plan (advanced) |
-| `POST` | `/partition-plan/promote` | Promote plugin from buffer to dedicated partitions |
-| `POST` | `/partition-plan/onboard-repo` | Upsert `services[repo]` + promote plugin (single version) |
-| `POST` | `/partition-plan/scale` | Add tail partitions to an existing plugin |
+| `PATCH` | `/partition-plan` | Partial update — optional `plugins`, `services`, `buffer`, `topicPartitionCount` |
+| `POST` | `/partition-plan/plugins` | Promote plugin from buffer to dedicated partitions |
+| `POST` | `/partition-plan/services` | Upsert allowlist + promote plugin |
+| `PATCH` | `/partition-plan/plugins/{pluginId}` | Append tail partitions to an existing plugin |
 
 Example promote:
 
 ```bash
-curl -s -X POST "https://ingestor:7182/api/audit/partition-plan/promote" \
+curl -s -X POST "https://ingestor:7182/api/audit/partition-plan/plugins" \
   -H "Content-Type: application/json" \
   -d '{"pluginId":"trino","partitionCount":3,"expectedVersion":1}'
 ```

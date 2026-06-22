@@ -23,8 +23,6 @@ import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
 
 /** Durable store for partition plans (Kafka compacted topic in dynamic mode). */
 public interface PartitionPlanRegistry extends AutoCloseable {
-    String getPlanTopicName();
-
     PartitionPlan readPlan(String auditTopicKey);
 
     void writePlan(String auditTopicKey, PartitionPlan plan);

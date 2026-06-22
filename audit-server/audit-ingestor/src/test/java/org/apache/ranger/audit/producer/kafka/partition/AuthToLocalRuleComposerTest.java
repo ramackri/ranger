@@ -76,7 +76,7 @@ public class AuthToLocalRuleComposerTest {
 
     @Test
     public void testComposeKmsOnlyIncludesRangerkmsRuleAndTail() {
-        String rules = composer.composeRulesForShortNames(Set.of("rangerkms"));
+        String rules = composer.composeKerberosRulesForAllowedShortNames(Set.of("rangerkms"));
 
         assertTrue(rules.contains("(rangerkms/.*@.*)s/.*/rangerkms/"));
         assertFalse(rules.contains("(hive/.*@.*)s/.*/hive/"));
@@ -86,7 +86,7 @@ public class AuthToLocalRuleComposerTest {
 
     @Test
     public void testComposeHdfsUsesCatalogRegexNotSimpleRule() {
-        String rules = composer.composeRulesForShortNames(Set.of("hdfs"));
+        String rules = composer.composeKerberosRulesForAllowedShortNames(Set.of("hdfs"));
 
         assertTrue(rules.contains("([ndj]n/.*@.*|hdfs/.*@.*)s/.*/hdfs/"));
         assertFalse(rules.contains("(hdfs/.*@.*)s/.*/hdfs/"));
@@ -94,7 +94,7 @@ public class AuthToLocalRuleComposerTest {
 
     @Test
     public void testComposeOzoneIncludesMultipleShortNames() {
-        String rules = composer.composeRulesForShortNames(Set.of("ozone", "om", "scm", "dn"));
+        String rules = composer.composeKerberosRulesForAllowedShortNames(Set.of("ozone", "om", "scm", "dn"));
 
         assertTrue(rules.contains("(ozone/.*@.*)s/.*/ozone/"));
         assertTrue(rules.contains("(om/.*@.*)s/.*/om/"));
@@ -102,7 +102,7 @@ public class AuthToLocalRuleComposerTest {
 
     @Test
     public void testComposeUnknownShortNameGeneratesSimpleRule() {
-        String rules = composer.composeRulesForShortNames(Set.of("myapp"));
+        String rules = composer.composeKerberosRulesForAllowedShortNames(Set.of("myapp"));
 
         assertTrue(rules.contains("(myapp/.*@.*)s/.*/myapp/"));
     }
@@ -128,7 +128,7 @@ public class AuthToLocalRuleComposerTest {
 
     @Test
     public void testKerberosMappingForComposedKmsRules() throws Exception {
-        String rules = composer.composeRulesForShortNames(Set.of("rangerkms"));
+        String rules = composer.composeKerberosRulesForAllowedShortNames(Set.of("rangerkms"));
         KerberosName.setRules(rules);
 
         assertEquals("rangerkms", new KerberosName("rangerkms/ranger-kms.rangernw@EXAMPLE.COM").getShortName());
@@ -136,7 +136,7 @@ public class AuthToLocalRuleComposerTest {
 
     @Test
     public void testKerberosMappingForComposedHdfsRules() throws Exception {
-        String rules = composer.composeRulesForShortNames(Set.of("hdfs"));
+        String rules = composer.composeKerberosRulesForAllowedShortNames(Set.of("hdfs"));
         KerberosName.setRules(rules);
 
         assertEquals("hdfs", new KerberosName("nn/namenode.rangernw@EXAMPLE.COM").getShortName());
@@ -146,7 +146,7 @@ public class AuthToLocalRuleComposerTest {
     public void testStartupDynamicWhenTopicMissingAppliesStaticCatalog() throws Exception {
         KerberosName.setRules(SENTINEL_NN_RULE);
         Properties props = dynamicModeProps();
-        composer.setPlanTopicExistsOverrideForTests(false);
+        composer.setPartitionPlanTopicExistsTestOverride(false);
         composer.applyStartupRulesForDynamicMode(props, PartitionPlanService.INGESTOR_PROP_PREFIX);
 
         assertEquals("hdfs", new KerberosName("nn/namenode.rangernw@EXAMPLE.COM").getShortName());
@@ -156,7 +156,7 @@ public class AuthToLocalRuleComposerTest {
     public void testStartupDynamicWhenTopicExistsDefersStaticCatalog() throws Exception {
         KerberosName.setRules(SENTINEL_NN_RULE);
         Properties props = dynamicModeProps();
-        composer.setPlanTopicExistsOverrideForTests(true);
+        composer.setPartitionPlanTopicExistsTestOverride(true);
         composer.applyStartupRulesForDynamicMode(props, PartitionPlanService.INGESTOR_PROP_PREFIX);
 
         assertEquals("startup-not-applied", new KerberosName("nn/namenode.rangernw@EXAMPLE.COM").getShortName());
@@ -168,7 +168,7 @@ public class AuthToLocalRuleComposerTest {
         Properties props = new Properties();
         props.setProperty(AuditServerConstants.PROP_AUTH_TO_LOCAL, SAMPLE_CATALOG);
         props.setProperty(PartitionPlanService.INGESTOR_PROP_PREFIX + "." + AuditServerConstants.PROP_PARTITION_PLAN_DYNAMIC_ENABLED, "false");
-        composer.setPlanTopicExistsOverrideForTests(false);
+        composer.setPartitionPlanTopicExistsTestOverride(false);
         composer.applyStartupRulesForDynamicMode(props, PartitionPlanService.INGESTOR_PROP_PREFIX);
 
         assertEquals("startup-not-applied", new KerberosName("nn/namenode.rangernw@EXAMPLE.COM").getShortName());
@@ -200,12 +200,12 @@ public class AuthToLocalRuleComposerTest {
     }
 
     @Test
-    public void testExtractTargetShortNameFromCatalogLines() {
-        assertEquals("hdfs", AuthToLocalRuleCatalog.extractTargetShortName(
+    public void testExtractMappedShortNameFromCatalogLines() {
+        assertEquals("hdfs", AuthToLocalRuleCatalog.extractMappedShortName(
                 "RULE:[2:$1/$2@$0]([ndj]n/.*@.*|hdfs/.*@.*)s/.*/hdfs/"));
-        assertEquals("rangerkms", AuthToLocalRuleCatalog.extractTargetShortName(
+        assertEquals("rangerkms", AuthToLocalRuleCatalog.extractMappedShortName(
                 "RULE:[2:$1/$2@$0](rangerkms/.*@.*)s/.*/rangerkms/"));
-        assertEquals("mapred", AuthToLocalRuleCatalog.extractTargetShortName(
+        assertEquals("mapred", AuthToLocalRuleCatalog.extractMappedShortName(
                 "RULE:[2:$1/$2@$0](jhs/.*@.*)s/.*/mapred/"));
     }
 

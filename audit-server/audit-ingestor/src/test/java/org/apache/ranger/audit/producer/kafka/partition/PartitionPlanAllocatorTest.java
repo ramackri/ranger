@@ -25,8 +25,10 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class PartitionPlanAllocatorTest {
     private PartitionPlan initialPlan;
@@ -71,7 +73,35 @@ public class PartitionPlanAllocatorTest {
 
     @Test
     public void testPromoteAlreadyConfiguredPluginFails() {
-        assertThrows(PartitionPlanException.class, () -> PartitionPlanAllocator.promotePlugin(initialPlan, "hdfs", 1, "ops"));
+        PartitionPlanException error = assertThrows(PartitionPlanException.class,
+                () -> PartitionPlanAllocator.promotePlugin(initialPlan, "hdfs", 1, "ops"));
+        assertTrue(error.getMessage().contains("requested 1"));
+    }
+
+    @Test
+    public void testIsPromoteAlreadyAppliedWhenPluginAndCountMatch() {
+        PartitionPlan promoted = PartitionPlanAllocator.promotePlugin(initialPlan, "trino", 3, "ops");
+
+        assertTrue(PartitionPlanAllocator.isPromoteAlreadyApplied(promoted, "trino", 3, null, null));
+        assertFalse(PartitionPlanAllocator.isPromoteAlreadyApplied(promoted, "trino", 5, null, null));
+    }
+
+    @Test
+    public void testIsOnboardAlreadyAppliedWhenAllowlistAndPluginMatch() {
+        PartitionPlan onboarded = PartitionPlanAllocator.onboardRepo(initialPlan, "dev_trino", "trino", 3, List.of("trino"), "ops");
+
+        assertTrue(PartitionPlanAllocator.isOnboardAlreadyApplied(onboarded, "dev_trino", "trino", 3, List.of("trino")));
+        assertFalse(PartitionPlanAllocator.isOnboardAlreadyApplied(onboarded, "dev_trino", "trino", 3, List.of("other")));
+    }
+
+    @Test
+    public void testPromoteConflictWhenPartitionCountDiffers() {
+        PartitionPlan promoted = PartitionPlanAllocator.promotePlugin(initialPlan, "trino", 3, "ops");
+
+        PartitionPlanException error = assertThrows(PartitionPlanException.class,
+                () -> PartitionPlanAllocator.promotePlugin(promoted, "trino", 5, "ops"));
+
+        assertTrue(error.getMessage().contains("requested 5"));
     }
 
     @Test

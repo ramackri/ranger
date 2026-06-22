@@ -30,9 +30,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /** Append-only plan updates: promote unknown plugins and scale hot plugins without reshuffling. */
-public final class PartitionPlanAllocator {
+public class PartitionPlanAllocator {
     private PartitionPlanAllocator() {
     }
 
@@ -47,6 +48,7 @@ public final class PartitionPlanAllocator {
     public static PartitionPlan promotePlugin(PartitionPlan current, String pluginId, int partitionCount, String updatedBy, String repo, List<String> allowedUsers) {
         requireMutationInputs(current, pluginId, partitionCount, updatedBy);
         if (current.getPlugins().containsKey(pluginId)) {
+            assertPromoteNotConflicting(current, pluginId, partitionCount, repo, allowedUsers);
             throw new PartitionPlanException("Plugin '" + pluginId + "' already has dedicated partitions");
         }
 
@@ -85,6 +87,26 @@ public final class PartitionPlanAllocator {
         int topicPartitionCount = appendTailPartitions(pluginIds, current.getTopicPartitionCount(), additionalPartitions);
 
         return commitPlanUpdate(current, updatedBy, topicPartitionCount, addPluginAssignment(current, pluginId, pluginIds), current.getBuffer().getPartitions(), current.getServices());
+    }
+
+    /**
+     * True when the plugin is already promoted with {@code partitionCount} slots and, when {@code repo} is set,
+     * the service allowlist already matches {@code allowedUsers}.
+     */
+    public static boolean isPromoteAlreadyApplied(PartitionPlan current, String pluginId, int partitionCount, String repo, List<String> allowedUsers) {
+        if (current == null || !pluginHasPartitionCount(current, pluginId, partitionCount)) {
+            return false;
+        }
+        if (StringUtils.isNotBlank(repo)) {
+            ServiceAllowlistEntry existing = current.getServices().get(repo.trim());
+            return existing != null && existing.hasSameAllowedUsers(allowedUsers);
+        }
+        return true;
+    }
+
+    /** True when onboard request matches current allowlist and plugin assignment. */
+    public static boolean isOnboardAlreadyApplied(PartitionPlan current, String repo, String pluginId, int partitionCount, List<String> allowedUsers) {
+        return isPromoteAlreadyApplied(current, pluginId, partitionCount, repo, allowedUsers);
     }
 
     /** Full plan replace (REST PUT) with append-only checks against the current plan. */
@@ -145,6 +167,28 @@ public final class PartitionPlanAllocator {
             services.put(repo.trim(), ServiceAllowlistEntry.ofUsers(allowedUsers));
         }
         return services;
+    }
+
+    private static boolean pluginHasPartitionCount(PartitionPlan current, String pluginId, int partitionCount) {
+        PluginPartitionAssignment assignment = current.getPlugins().get(pluginId);
+        return assignment != null && assignment.getPartitions().size() == partitionCount;
+    }
+
+    private static void assertPromoteNotConflicting(PartitionPlan current, String pluginId, int partitionCount, String repo, List<String> allowedUsers) {
+        if (isPromoteAlreadyApplied(current, pluginId, partitionCount, repo, allowedUsers)) {
+            return;
+        }
+        PluginPartitionAssignment existing = Objects.requireNonNull(current.getPlugins().get(pluginId));
+        if (existing.getPartitions().size() != partitionCount) {
+            throw new PartitionPlanException("Plugin '" + pluginId + "' already has "
+                    + existing.getPartitions().size() + " dedicated partition(s); requested " + partitionCount);
+        }
+        if (StringUtils.isNotBlank(repo)) {
+            ServiceAllowlistEntry serviceEntry = current.getServices().get(repo.trim());
+            if (serviceEntry != null && !serviceEntry.hasSameAllowedUsers(allowedUsers)) {
+                throw new PartitionPlanException("Service '" + repo.trim() + "' already exists with different allowedUsers");
+            }
+        }
     }
 
     private static void requireMutationInputs(PartitionPlan current, String pluginId, int partitionCount, String updatedBy) {

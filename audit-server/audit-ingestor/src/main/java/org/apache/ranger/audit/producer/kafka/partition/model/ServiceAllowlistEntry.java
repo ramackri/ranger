@@ -19,10 +19,13 @@
 
 package org.apache.ranger.audit.producer.kafka.partition.model;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -30,9 +33,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-/** Per-repo service allowlist entry stored in the unified partition-plan registry document. */
+@JsonAutoDetect(getterVisibility = Visibility.NONE, setterVisibility = Visibility.NONE, fieldVisibility = Visibility.ANY)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public final class ServiceAllowlistEntry {
+public class ServiceAllowlistEntry implements Serializable {
     private final List<String> allowedUsers;
     private final String source;
     private final String notes;
@@ -62,7 +65,7 @@ public final class ServiceAllowlistEntry {
                 unique.add(user.trim());
             }
         }
-        return Collections.unmodifiableList(new ArrayList<>(unique));
+        return List.copyOf(unique);
     }
 
     public List<String> getAllowedUsers() {
@@ -77,16 +80,23 @@ public final class ServiceAllowlistEntry {
         return notes;
     }
 
+    /** True when normalized allowedUsers match (ignores source and notes). */
+    public boolean hasSameAllowedUsers(List<String> users) {
+        return Objects.equals(allowedUsers, ofUsers(users).getAllowedUsers());
+    }
+
     @Override
-    public boolean equals(Object o) {
-        if (this == o) {
+    public boolean equals(Object otherServiceAllowlistEntryObj) {
+        if (this == otherServiceAllowlistEntryObj) {
             return true;
         }
-        if (o == null || getClass() != o.getClass()) {
+        if (otherServiceAllowlistEntryObj == null || getClass() != otherServiceAllowlistEntryObj.getClass()) {
             return false;
         }
-        ServiceAllowlistEntry that = (ServiceAllowlistEntry) o;
-        return Objects.equals(allowedUsers, that.allowedUsers) && Objects.equals(source, that.source) && Objects.equals(notes, that.notes);
+        ServiceAllowlistEntry otherAllowlistEntry = (ServiceAllowlistEntry) otherServiceAllowlistEntryObj;
+        return Objects.equals(allowedUsers, otherAllowlistEntry.allowedUsers)
+                && Objects.equals(source, otherAllowlistEntry.source)
+                && Objects.equals(notes, otherAllowlistEntry.notes);
     }
 
     @Override
