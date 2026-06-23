@@ -20,7 +20,7 @@
 package org.apache.ranger.audit.producer.kafka.partition.constants;
 
 /** Shared constants for the dynamic Kafka partition-plan registry. */
-public final class PartitionPlanConstants {
+public class PartitionPlanConstants {
     /** Version number of the first XML-seeded initial bootstrap plan in an empty registry. */
     public static final int    INITIAL_PLAN_VERSION              = 1;
     /** {@code updatedBy} value on plans published by {@code PartitionPlanBootstrap}. */

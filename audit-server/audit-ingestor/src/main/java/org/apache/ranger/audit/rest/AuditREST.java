@@ -27,6 +27,8 @@ import org.apache.ranger.audit.producer.kafka.partition.AuthToLocalRuleComposer;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanHolder;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanKafkaConfig;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanService;
+import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanUpdateApplier;
+import org.apache.ranger.audit.producer.kafka.partition.ServiceAllowlistResolver;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanConflictException;
 import org.apache.ranger.audit.producer.kafka.partition.exception.PartitionPlanException;
 import org.apache.ranger.audit.producer.kafka.partition.model.OnboardService;
@@ -298,8 +300,7 @@ public class AuditREST {
                 ret = authFailure;
             } else {
                 try {
-                    ret = toSuccessfulPartitionPlanResponse(
-                            partitionPlanService.mergePartitionPlan(partitionPlanUpdate, resolveUpdatedBy(httpRequest)));
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.mergePartitionPlan(partitionPlanUpdate, resolveUpdatedBy(httpRequest)));
                 } catch (PartitionPlanConflictException e) {
                     ret = toPartitionPlanConflictResponse("PATCH /partition-plan", e);
                 } catch (PartitionPlanException e) {
@@ -393,16 +394,14 @@ public class AuditREST {
                 ret = authFailure;
             } else {
                 try {
-                    ret = toSuccessfulPartitionPlanResponse(
-                            partitionPlanService.onboardService(request, resolveUpdatedBy(httpRequest)));
+                    ret = toSuccessfulPartitionPlanResponse(partitionPlanService.onboardService(request, resolveUpdatedBy(httpRequest)));
                 } catch (PartitionPlanConflictException e) {
                     ret = toPartitionPlanConflictResponse("POST /partition-plan/services", e);
                 } catch (PartitionPlanException e) {
                     ret = toPartitionPlanErrorResponse("POST /partition-plan/services", e);
                 } catch (Exception e) {
                     LOG.error("Unexpected error creating service in partition plan", e);
-                    ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                            .entity(buildErrorResponse("Failed to create service in partition plan")).build();
+                    ret = Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(buildErrorResponse("Failed to create service in partition plan")).build();
                 }
             }
         }
@@ -571,22 +570,17 @@ public class AuditREST {
      * @return true if user is allowed, false otherwise
      */
     private boolean isAllowedServiceUser(String serviceName, String userName) {
-        if (StringUtils.isBlank(serviceName) || StringUtils.isBlank(userName)) {
-            return false;
-        }
-
-        if (partitionPlanService != null && partitionPlanService.isDynamicPartitionPlanEnabled()) {
-            Set<String> registryUsers = PartitionPlanHolder.getInstance().getAllowedUsersForService(serviceName);
-            if (registryUsers != null) {
-                boolean ret = registryUsers.contains(userName);
-                LOG.debug("isAllowedServiceUser(serviceName={}, userName={}) from registry: ret={}", serviceName, userName, ret);
-                return ret;
-            }
-        }
-
-        Set<String> allowedUsers = allowedServiceUsers.get(serviceName);
-        boolean ret = allowedUsers != null && allowedUsers.contains(userName);
-        LOG.debug("isAllowedServiceUser(serviceName={}, userName={}) from static XML: ret={}", serviceName, userName, ret);
+        boolean dynamicEnabled = partitionPlanService != null
+                && partitionPlanService.isDynamicPartitionPlanEnabled();
+        boolean ret = ServiceAllowlistResolver.isAllowedServiceUser(
+                serviceName,
+                userName,
+                dynamicEnabled,
+                PartitionPlanHolder.getInstance(),
+                allowedServiceUsers);
+        LOG.debug(
+                "isAllowedServiceUser(serviceName={}, userName={}, dynamic={}): ret={}",
+                serviceName, userName, dynamicEnabled, ret);
         return ret;
     }
 

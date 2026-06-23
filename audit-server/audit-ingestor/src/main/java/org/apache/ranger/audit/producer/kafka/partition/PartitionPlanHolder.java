@@ -28,7 +28,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Hot-path in-memory plan for {@code AuditPartitioner} and the background watcher. */
-public final class PartitionPlanHolder {
+public class PartitionPlanHolder {
     private static final PartitionPlanHolder INSTANCE = new PartitionPlanHolder();
 
     private final AtomicReference<PartitionPlan> planRef = new AtomicReference<>();
@@ -59,7 +59,12 @@ public final class PartitionPlanHolder {
 
     /**
      * Returns allowed short usernames for a service repo from the in-memory registry document.
-     * {@code null} when the plan has no {@code services} block (caller should fall back to static XML).
+     * {@code null} when the plan has no {@code services} block, or when the repo is not present
+     * in the plan (caller should fall back to static XML).
+     * Returns an empty set when the repo is present with an explicit empty allowlist (deny all).
+     *
+     * <p>Used by {@link ServiceAllowlistResolver} for per-repo POST authorization — not for the global
+     * allowlist union ({@link AuthToLocalRuleComposer#collectAllowedUserShortNames}).
      */
     public Set<String> getAllowedUsersForService(String serviceName) {
         PartitionPlan plan = planRef.get();
@@ -67,7 +72,10 @@ public final class PartitionPlanHolder {
             return null;
         }
         ServiceAllowlistEntry entry = plan.getServices().get(serviceName);
-        if (entry == null || entry.getAllowedUsers().isEmpty()) {
+        if (entry == null) {
+            return null;
+        }
+        if (entry.getAllowedUsers().isEmpty()) {
             return Collections.emptySet();
         }
         return Collections.unmodifiableSet(new LinkedHashSet<>(entry.getAllowedUsers()));

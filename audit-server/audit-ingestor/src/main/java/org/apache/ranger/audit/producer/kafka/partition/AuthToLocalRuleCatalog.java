@@ -31,7 +31,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-/** Parses and composes Kerberos {@code auth_to_local} rules from the ingestor site XML catalog. */
+/** Parses and composes Kerberos {@code auth_to_local} rules from {@code ranger.audit.ingestor.auth.to.local}. */
 public class AuthToLocalRuleCatalog {
     private static final Pattern RULE_SUBSTITUTION_SHORT_NAME_PATTERN =
             Pattern.compile("s/\\.\\*/([^/]+)/\\s*$");
@@ -53,8 +53,7 @@ public class AuthToLocalRuleCatalog {
             if (isFallbackKerberosRule(ruleLine)) {
                 fallbackRuleLines.add(ruleLine);
             } else {
-                primaryCatalogRulesInOrder.add(
-                        new PrimaryCatalogRule(ruleLine, extractMappedShortName(ruleLine)));
+                primaryCatalogRulesInOrder.add(new PrimaryCatalogRule(ruleLine, extractMappedShortName(ruleLine)));
             }
         }
         return new AuthToLocalRuleCatalog(primaryCatalogRulesInOrder, fallbackRuleLines);
@@ -71,8 +70,16 @@ public class AuthToLocalRuleCatalog {
     }
 
     /**
-     * Subset of catalog rules for the union of active short usernames from partition-plan allowlists.
-     * Unknown names get a generated {@code service/host@REALM -> service} rule before fallback rules.
+     * Builds the active rule set for dynamic mode: catalog rules whose mapped short name is in the union,
+     * plus generated rules for union members not covered by the catalog, plus fallback tail.
+     *
+     * <p>Examples (union member to effective rule):
+     * <ul>
+     *   <li>{@code hdfs} in union: full hdfs catalog line (nn/dn/jn/hdfs principals map to hdfs)</li>
+     *   <li>{@code nn} in union but catalog mapped name is hdfs: generated nn rule plus hdfs catalog line</li>
+     *   <li>{@code foo} in union, not in catalog: generated foo/host@REALM to foo rule</li>
+     * </ul>
+     * Empty union falls back to {@link #composeFullCatalogRules()}.
      */
     public String composeRulesForAllowedShortNames(Set<String> allowedUserShortNames) {
         if (allowedUserShortNames == null || allowedUserShortNames.isEmpty()) {
@@ -111,6 +118,10 @@ public class AuthToLocalRuleCatalog {
         return primaryCatalogRulesInOrder.size();
     }
 
+    /**
+     * Mapped Kerberos short name from a catalog rule line (substitution suffix s/.star/&lt;name&gt;/).
+     * Example: hdfs catalog rule maps nn/dn/jn/hdfs principals to short name hdfs.
+     */
     public static String extractMappedShortName(String ruleLine) {
         if (StringUtils.isBlank(ruleLine)) {
             return null;
@@ -136,6 +147,7 @@ public class AuthToLocalRuleCatalog {
         return "DEFAULT".equals(ruleLine) || ruleLine.startsWith("RULE:[1:") || ruleLine.contains("s/@.*//");
     }
 
+    /** Simple rule for allowlist short names absent from the XML catalog: {@code myapp/host@REALM -> myapp}. */
     private static String buildGeneratedShortNameRule(String shortName) {
         return String.format(GENERATED_SHORT_NAME_RULE_TEMPLATE, shortName, shortName);
     }

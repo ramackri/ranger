@@ -32,7 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Builds the initial bootstrap plan from legacy XML and seeds the registry when the plan topic is empty. */
-public final class PartitionPlanBootstrap {
+public class PartitionPlanBootstrap {
     private static final Logger LOG = LoggerFactory.getLogger(PartitionPlanBootstrap.class);
 
     private PartitionPlanBootstrap() {

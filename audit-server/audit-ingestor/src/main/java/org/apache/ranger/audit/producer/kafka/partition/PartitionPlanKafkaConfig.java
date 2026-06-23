@@ -33,7 +33,7 @@ import java.util.Properties;
 import java.util.Set;
 
 /** Kafka client settings for the partition-plan registry topic. */
-public final class PartitionPlanKafkaConfig {
+public class PartitionPlanKafkaConfig {
     private PartitionPlanKafkaConfig() {
     }
 

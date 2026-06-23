@@ -30,7 +30,7 @@ import org.apache.ranger.audit.producer.kafka.partition.model.PluginScale;
 import java.util.List;
 
 /** Validates partition-plan REST mutation request bodies before registry writes. */
-public final class PartitionPlanRequestValidator {
+public class PartitionPlanRequestValidator {
     private PartitionPlanRequestValidator() {
     }
 

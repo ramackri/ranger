@@ -39,7 +39,7 @@ import java.util.Map;
 import java.util.Properties;
 
 /** Background thread: load plan from Kafka (or XML-seeded initial bootstrap plan), then incrementally refresh in-memory plan. */
-public final class PartitionPlanWatcher implements Runnable {
+public class PartitionPlanWatcher implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(PartitionPlanWatcher.class);
 
     private final Properties props;
@@ -52,6 +52,7 @@ public final class PartitionPlanWatcher implements Runnable {
 
     private PartitionPlanRegistry registry;
     private KafkaConsumer<String, String> consumer;
+    private PartitionPlanUpdateApplier planUpdateApplier;
     private Thread watcherThread;
     private volatile boolean running;
 
@@ -63,6 +64,7 @@ public final class PartitionPlanWatcher implements Runnable {
         this.refreshIntervalMs     = PartitionPlanKafkaConfig.resolveRefreshIntervalMs(props, propPrefix);
         this.consumerPollTimeoutMs = PartitionPlanKafkaConfig.resolveConsumerPollTimeoutMs(props, propPrefix);
         this.planTopic             = PartitionPlanKafkaConfig.resolvePlanTopicName(props, propPrefix);
+        this.planUpdateApplier     = new PartitionPlanUpdateApplier(props, auditTopicKey, this.partitionPlanHolder, this::resolveAuditTopicPartitionCount);
     }
 
     /** Blocking startup: empty-registry bootstrap, install plan, then start background refresh. */
@@ -74,7 +76,8 @@ public final class PartitionPlanWatcher implements Runnable {
         plan = ServiceAllowlistBootstrap.mergeSiteXmlAllowlistsWhenPlanServicesMissing(plan, props);
         int kafkaPartitionCount = resolveAuditTopicPartitionCount();
         partitionPlanHolder.install(plan, kafkaPartitionCount);
-        openConsumerAtLogEnd();
+        openConsumerAtBeginning();
+        pollIncrementalUpdates();
         running       = true;
         watcherThread = new Thread(this, "PartitionPlanWatcher");
         watcherThread.setDaemon(true);
@@ -126,35 +129,16 @@ public final class PartitionPlanWatcher implements Runnable {
         do {
             records = consumer.poll(Duration.ofMillis(consumerPollTimeoutMs));
             for (ConsumerRecord<String, String> record : records) {
-                applyRecordIfNewer(record);
+                planUpdateApplier.applyRecordIfNewer(record);
             }
         } while (!records.isEmpty());
     }
 
-    /** Installs a plan record when its version is newer than the in-memory copy. */
-    private void applyRecordIfNewer(ConsumerRecord<String, String> record) {
-        if (!auditTopicKey.equals(record.key())) {
-            return;
-        }
-        try {
-            PartitionPlan plan = PartitionPlan.fromJson(record.value());
-            plan = ServiceAllowlistBootstrap.mergeSiteXmlAllowlistsWhenPlanServicesMissing(plan, props);
-            if (plan.getVersion() <= partitionPlanHolder.getLastInstalledVersion()) {
-                return;
-            }
-            int kafkaPartitionCount = resolveAuditTopicPartitionCount();
-            partitionPlanHolder.install(plan, kafkaPartitionCount);
-            LOG.info("Installed partition plan version {} from Kafka offset {}", plan.getVersion(), record.offset());
-        } catch (Exception e) {
-            LOG.error("Ignoring invalid partition plan at offset {} for audit topic '{}'", record.offset(), auditTopicKey, e);
-        }
-    }
-
-    private void openConsumerAtLogEnd() throws Exception {
+    private void openConsumerAtBeginning() throws Exception {
         consumer = new KafkaConsumer<>(PartitionPlanKafkaConfig.consumerConfig(props, propPrefix, PartitionPlanConstants.PLAN_WATCHER_CONSUMER_GROUP));
         TopicPartition partition = new TopicPartition(planTopic, 0);
         consumer.assign(Collections.singletonList(partition));
-        consumer.seekToEnd(Collections.singletonList(partition));
+        consumer.seekToBeginning(Collections.singletonList(partition));
     }
 
     private void closeConsumer() {

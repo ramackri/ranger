@@ -71,24 +71,31 @@ public class ServiceAllowlistBootstrapTest {
 
         assertEquals(3, enriched.getVersion());
         assertNotNull(enriched.getServices().get("dev_hive"));
-        assertTrue(PartitionPlanHolder.getInstance().getAllowedUsersForService("dev_hive") == null);
+        PartitionPlanHolder.getInstance().install(enriched, 6);
+        assertIterableEquals(List.of("hive"), PartitionPlanHolder.getInstance().getAllowedUsersForService("dev_hive"));
     }
 
     @Test
-    public void testHolderReturnsRegistryUsersWhenServicesPresent() {
+    public void testMergeSkippedWhenPlanAlreadyHasPartialServices() {
         Map<String, ServiceAllowlistEntry> services = new LinkedHashMap<>();
-        services.put("dev_hive", ServiceAllowlistEntry.ofUsers("hive"));
+        services.put("dev_hdfs", ServiceAllowlistEntry.ofUsers("hdfs"));
         PartitionPlan plan = PartitionPlan.builder()
                 .topic("ranger_audits")
-                .version(1)
+                .version(2)
                 .topicPartitionCount(6)
                 .plugins(Map.of("hdfs", PluginPartitionAssignment.of(0, 1, 2)))
                 .buffer(PluginPartitionAssignment.of(3, 4, 5))
                 .services(services)
                 .build();
-        PartitionPlanHolder.getInstance().install(plan, 6);
 
-        assertIterableEquals(List.of("hive"), PartitionPlanHolder.getInstance().getAllowedUsersForService("dev_hive"));
-        assertTrue(PartitionPlanHolder.getInstance().getAllowedUsersForService("dev_trino").isEmpty());
+        Properties props = new Properties();
+        props.setProperty(PROP_PREFIX_AUDIT_SERVER_SERVICE + "dev_hive" + PROP_SUFFIX_ALLOWED_USERS, "hive");
+
+        PartitionPlan merged = ServiceAllowlistBootstrap.mergeSiteXmlAllowlistsWhenPlanServicesMissing(plan, props);
+
+        assertEquals(plan, merged);
+        assertEquals(1, merged.getServices().size());
+        assertNotNull(merged.getServices().get("dev_hdfs"));
+        assertTrue(merged.getServices().get("dev_hive") == null);
     }
 }

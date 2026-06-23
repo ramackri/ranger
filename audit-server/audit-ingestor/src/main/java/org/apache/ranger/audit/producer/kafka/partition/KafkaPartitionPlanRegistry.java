@@ -38,7 +38,7 @@ import java.util.Collections;
 import java.util.Properties;
 
 /** Kafka compacted topic implementation of {@link PartitionPlanRegistry}. */
-public final class KafkaPartitionPlanRegistry implements PartitionPlanRegistry {
+public class KafkaPartitionPlanRegistry implements PartitionPlanRegistry {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaPartitionPlanRegistry.class);
 
     private final Properties props;

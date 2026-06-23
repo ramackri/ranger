@@ -35,10 +35,16 @@ import java.util.Properties;
 import java.util.Set;
 
 /**
- * Builds effective {@code auth_to_local} rules from the XML catalog and the union of partition-plan
- * {@code services[].allowedUsers}. Rules are not stored in the partition-plan JSON document.
+ * Builds effective {@code auth_to_local} rules from the XML catalog and the global allowlist union
+ * ({@link #collectAllowedUserShortNames}). Rule text is not stored in the partition-plan Kafka JSON.
+ *
+ * <p>Two-step audit POST identity (see {@link ServiceAllowlistResolver}):
+ * <ol>
+ *   <li><b>Kerberos mapping</b> — {@code KerberosName.getShortName()} uses composed rules (global union)</li>
+ *   <li><b>Authorization</b> — per-repo {@code services[repo].allowedUsers} (or static XML fallback)</li>
+ * </ol>
  */
-public final class AuthToLocalRuleComposer {
+public class AuthToLocalRuleComposer {
     private static final Logger LOG = LoggerFactory.getLogger(AuthToLocalRuleComposer.class);
 
     private static final AuthToLocalRuleComposer INSTANCE = new AuthToLocalRuleComposer();
@@ -61,7 +67,7 @@ public final class AuthToLocalRuleComposer {
         initializeFromProperties(ingestorProperties);
     }
 
-    synchronized void initializeFromProperties(Properties ingestorProperties) {
+    public synchronized void initializeFromProperties(Properties ingestorProperties) {
         String rawAuthToLocalRules = ingestorProperties.getProperty(AuditServerConstants.PROP_AUTH_TO_LOCAL);
         ruleCatalog = AuthToLocalRuleCatalog.parse(rawAuthToLocalRules);
         lastAppliedRuleText              = null;
@@ -94,8 +100,20 @@ public final class AuthToLocalRuleComposer {
     }
 
     /**
-     * When dynamic partition-plan mode is enabled, compose rules from the union of allowlisted short
-     * names and install them before audit REST authorization runs.
+     * When dynamic partition-plan mode is enabled, compose {@code auth_to_local} rules from the XML
+     * catalog plus the global allowlist union, then install via {@link KerberosName#setRules(String)}.
+     *
+     * <p>Called from {@link PartitionPlanHolder#install} on every plan version. Example plan:
+     * <pre>{@code
+     * services: {
+     *   dev_hdfs:  { allowedUsers: [hdfs, nn] },
+     *   dev_hive:  { allowedUsers: [hive] },
+     *   dev_foo:   { allowedUsers: [foo] }   // new plugin, not in XML catalog
+     * }
+     * }</pre>
+     * Union of hdfs, nn, hive, foo activates hdfs catalog rule (nn/dn/jn/hdfs principals to hdfs),
+     * hive catalog rule, and a generated foo/host@REALM to foo rule. Per-repo POST checks still
+     * use each repo's own allowlist, not the union.
      */
     public void applyForPlan(PartitionPlan partitionPlan) {
         Properties ingestorProperties = AuditServerConfig.getInstance().getProperties();
@@ -115,7 +133,7 @@ public final class AuthToLocalRuleComposer {
     }
 
     /** Visible for tests — composes without applying Kerberos rules. */
-    String composeKerberosRulesForAllowedShortNames(Set<String> allowedUserShortNames) {
+    public String composeKerberosRulesForAllowedShortNames(Set<String> allowedUserShortNames) {
         return requireRuleCatalog().composeRulesForAllowedShortNames(allowedUserShortNames);
     }
 
@@ -127,7 +145,7 @@ public final class AuthToLocalRuleComposer {
     }
 
     /** When non-null, overrides {@link AuditMessageQueueUtils#partitionPlanTopicExists} for unit tests. */
-    void setPartitionPlanTopicExistsTestOverride(Boolean topicExists) {
+    public void setPartitionPlanTopicExistsTestOverride(Boolean topicExists) {
         partitionPlanTopicExistsTestOverride = topicExists;
     }
 
@@ -139,7 +157,14 @@ public final class AuthToLocalRuleComposer {
         return AuditMessageQueueUtils.partitionPlanTopicExists(ingestorProperties, ingestorPropertyPrefix);
     }
 
-    static Set<String> collectAllowedUserShortNames(PartitionPlan partitionPlan) {
+    /**
+     * Global allowlist union: all distinct {@code allowedUsers} short names across {@code plan.services}.
+     * Used only for {@code auth_to_local} composition (which mapping rules are active), not for POST authorization.
+     *
+     * <p>Example: dev_hdfs with hdfs and nn, dev_hive with hive, dev_ozone with om and ozone yields
+     * union hdfs, nn, hive, om, ozone. Repos not listed in services do not contribute.
+     */
+    public static Set<String> collectAllowedUserShortNames(PartitionPlan partitionPlan) {
         Set<String> allowedUserShortNames = new LinkedHashSet<>();
         if (partitionPlan == null || partitionPlan.getServices() == null) {
             return allowedUserShortNames;

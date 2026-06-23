@@ -255,6 +255,7 @@ pp_set_dynamic_enabled() {
   done
   if [[ "${value}" == "true" ]]; then
     pp_ensure_audit_partitioner_for_dynamic "${container}"
+    pp_prepare_audit_topic_for_greenfield "${container}"
   fi
   if [[ "${changed}" == "true" && "${restart}" == "true" ]]; then
     echo "  Restarting ${container} (dynamic=${value})..."

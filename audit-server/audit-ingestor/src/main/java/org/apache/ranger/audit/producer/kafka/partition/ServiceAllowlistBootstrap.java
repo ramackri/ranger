@@ -34,7 +34,7 @@ import static org.apache.ranger.audit.server.AuditServerConstants.PROP_PREFIX_AU
 import static org.apache.ranger.audit.server.AuditServerConstants.PROP_SUFFIX_ALLOWED_USERS;
 
 /** Loads service allowlist entries from ingestor site XML for registry bootstrap and brownfield merge. */
-public final class ServiceAllowlistBootstrap {
+public class ServiceAllowlistBootstrap {
     private static final String ALLOWLIST_SOURCE_SITE_XML = "xml-bootstrap";
 
     private ServiceAllowlistBootstrap() {

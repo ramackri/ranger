@@ -28,7 +28,7 @@ import java.util.List;
 import java.util.Map;
 
 /** Inputs for building the first partition plan from legacy ingestor XML / producer config. */
-public final class PartitionPlanBootstrapConfig {
+public class PartitionPlanBootstrapConfig {
     private final String auditTopic;
     private final String[] configuredPlugins;
     private final int defaultPartitionsPerPlugin;
