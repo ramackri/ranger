@@ -184,7 +184,7 @@
 
     <property>
         <name>ranger.audit.ingestor.service.dev_hdfs.allowed.users</name>
-        <value>hdfs</value>
+        <value>hdfs,nn</value>
         <description>Allowed users for dev_hdfs (Policy Manager service name; from policy.download.auth.users)</description>
     </property>
 

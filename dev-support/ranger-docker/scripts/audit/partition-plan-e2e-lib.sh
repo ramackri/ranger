@@ -199,7 +199,7 @@ pp_patch_site_prop() {
   local site="$2"
   local prop="$3"
   local value="$4"
-  docker exec -u root "${container}" python3 - "${site}" "${prop}" "${value}" <<'PY'
+  docker exec -i -u root "${container}" python3 - "${site}" "${prop}" "${value}" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -226,6 +226,21 @@ tree.write(path, encoding="unicode", xml_declaration=False)
 PY
 }
 
+pp_ensure_audit_partitioner_for_dynamic() {
+  local container="${1:-${CONTAINER}}"
+  local seed_plugin="${2:-${PP_DYNAMIC_PRODUCER_PLUGIN:-hdfs}}"
+  local plugins
+  plugins="$(pp_read_site_prop "${container}" "ranger.audit.ingestor.kafka.configured.plugins")"
+  if [[ -n "${plugins}" ]]; then
+    return 0
+  fi
+  for site in "${SITE_XMLS[@]}"; do
+    if docker exec "${container}" test -f "${site}" 2>/dev/null; then
+      pp_patch_site_prop "${container}" "${site}" "ranger.audit.ingestor.kafka.configured.plugins" "${seed_plugin}"
+    fi
+  done
+}
+
 pp_set_dynamic_enabled() {
   local container="$1"
   local value="$2"
@@ -238,6 +253,9 @@ pp_set_dynamic_enabled() {
     pp_patch_site_prop "${container}" "${site}" "${PROP_DYNAMIC}" "${value}"
     changed=true
   done
+  if [[ "${value}" == "true" ]]; then
+    pp_ensure_audit_partitioner_for_dynamic "${container}"
+  fi
   if [[ "${changed}" == "true" && "${restart}" == "true" ]]; then
     echo "  Restarting ${container} (dynamic=${value})..."
     PP_RESTART_SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -298,6 +316,51 @@ ${script} --command-config /tmp/pp-kafka-client.properties" \
     2>/dev/null || true
 }
 
+# kafka-console-consumer uses --consumer.config (not --command-config).
+pp_kafka_consumer_run() {
+  local script="$1"
+  docker exec "${KAFKA_CONTAINER}" bash -c \
+    "cat > /tmp/pp-kafka-client.properties <<'EOF'
+security.protocol=SASL_PLAINTEXT
+sasl.kerberos.service.name=kafka
+EOF
+cat > /tmp/pp-kafka-client-jaas.conf <<EOF
+KafkaClient {
+  com.sun.security.auth.module.Krb5LoginModule required
+  useKeyTab=true
+  storeKey=true
+  keyTab=\"${KAFKA_KEYTAB}\"
+  principal=\"${KAFKA_PRINCIPAL}\";
+};
+EOF
+export KAFKA_OPTS=\"-Djava.security.auth.login.config=/tmp/pp-kafka-client-jaas.conf\"
+${script} --consumer.config /tmp/pp-kafka-client.properties" \
+    2>/dev/null || true
+}
+
+
+pp_stop_audit_stack_consumers() {
+  docker stop ranger-audit-ingestor ranger-audit-dispatcher-solr ranger-audit-dispatcher-hdfs 2>/dev/null || true
+}
+
+pp_start_audit_stack_consumers() {
+  docker start ranger-audit-ingestor ranger-audit-dispatcher-solr ranger-audit-dispatcher-hdfs 2>/dev/null || true
+}
+
+pp_kafka_wait_topic_absent() {
+  local topic="$1"
+  local timeout="${2:-180}"
+  local deadline=$((SECONDS + timeout))
+  while (( SECONDS < deadline )); do
+    if ! pp_kafka_run "/opt/kafka/bin/kafka-topics.sh --bootstrap-server ranger-kafka.rangernw:9092 --list" | grep -qx "${topic}"; then
+      return 0
+    fi
+    sleep 5
+  done
+  echo "ERROR: Kafka topic '${topic}' still present after ${timeout}s" >&2
+  return 1
+}
+
 pp_kafka_topic_partition_count() {
   local topic="$1"
   local out
@@ -306,8 +369,11 @@ pp_kafka_topic_partition_count() {
 }
 
 pp_delete_plan_topic() {
+  pp_stop_audit_stack_consumers
   pp_kafka_run "/opt/kafka/bin/kafka-topics.sh --bootstrap-server ranger-kafka.rangernw:9092 --delete --topic '${PLAN_TOPIC}'"
-  sleep 3
+  pp_kafka_wait_topic_absent "${PLAN_TOPIC}" 180 || true
+  pp_start_audit_stack_consumers
+  sleep 10
 }
 
 # Greenfield bootstrap requires plan.topicPartitionCount == Kafka ranger_audits partitions.
@@ -321,10 +387,15 @@ pp_prepare_audit_topic_for_greenfield() {
     return 0
   fi
   echo "  Recreating ${AUDIT_TOPIC} (${actual} partitions -> ${expected} for site XML layout)..."
+  pp_stop_audit_stack_consumers
   pp_kafka_run "/opt/kafka/bin/kafka-topics.sh --bootstrap-server ranger-kafka.rangernw:9092 --delete --topic '${AUDIT_TOPIC}'"
-  sleep 5
+  pp_kafka_run "/opt/kafka/bin/kafka-topics.sh --bootstrap-server ranger-kafka.rangernw:9092 --delete --topic '${PLAN_TOPIC}'" || true
+  pp_kafka_wait_topic_absent "${AUDIT_TOPIC}" 180
+  pp_kafka_wait_topic_absent "${PLAN_TOPIC}" 180 || true
   pp_kafka_run "/opt/kafka/bin/kafka-topics.sh --bootstrap-server ranger-kafka.rangernw:9092 --create --topic '${AUDIT_TOPIC}' --partitions ${expected} --replication-factor 1"
   sleep 3
+  pp_start_audit_stack_consumers
+  sleep 10
 }
 
 pp_seed_plan_json() {

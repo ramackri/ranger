@@ -175,24 +175,27 @@ public class AuditPartitioner implements Partitioner {
     }
 
     /** Picks a partition from the in-memory plan: round-robin for known plugins, hash for buffer. */
-    private int partitionFromPlan(String appId, int numPartitions) {
+    private int partitionFromPlan(String appId, int clusterPartitionCount) {
         PartitionPlan plan = PartitionPlanHolder.getInstance().getPlan();
         if (plan == null) {
             LOG.error("Dynamic partition plan is not loaded; falling back to hash routing for appId '{}'", appId);
-            return hashAppIdToPartitionIndex(appId, numPartitions);
+            return hashAppIdToPartitionIndex(appId, clusterPartitionCount);
         }
+        // After scale, producer cluster metadata can lag behind plan.topicPartitionCount; trust the plan
+        // so planned tail ids (e.g. 12) are not clamped into buffer (e.g. 11).
+        int routingPartitionCount = Math.max(clusterPartitionCount, plan.getTopicPartitionCount());
         PluginPartitionAssignment assignment = findPluginAssignment(plan, appId);
         if (assignment != null && !assignment.getPartitions().isEmpty()) {
             List<Integer> partitionIds = assignment.getPartitions();
             int roundRobinIndex = nextRoundRobinIndex(appId, partitionIds.size());
-            return boundPartitionToTopic(partitionIds.get(roundRobinIndex), numPartitions);
+            return boundPartitionToTopic(partitionIds.get(roundRobinIndex), routingPartitionCount);
         }
         List<Integer> bufferIds = plan.getBuffer().getPartitions();
         if (bufferIds.isEmpty()) {
-            return hashAppIdToPartitionIndex(appId, numPartitions);
+            return hashAppIdToPartitionIndex(appId, routingPartitionCount);
         }
         int bufferIndex = hashAppIdToPartitionIndex(appId, bufferIds.size());
-        return boundPartitionToTopic(bufferIds.get(bufferIndex), numPartitions);
+        return boundPartitionToTopic(bufferIds.get(bufferIndex), routingPartitionCount);
     }
 
     /** Sticky hash: maps {@code appId} to an index in {@code [0, partitionCount)}. */
@@ -228,12 +231,21 @@ public class AuditPartitioner implements Partitioner {
         return 1;
     }
 
-    /** Bounds a planned partition id to the topic's current live partition range. */
-    private static int boundPartitionToTopic(int plannedPartitionId, int topicPartitionCount) {
-        if (topicPartitionCount <= 0) {
+    /**
+     * Returns a valid partition id for routing. Planned ids below {@code routingPartitionCount} are returned
+     * as-is; never clamp a tail id into the previous last partition when cluster metadata is stale.
+     */
+    private static int boundPartitionToTopic(int plannedPartitionId, int routingPartitionCount) {
+        if (routingPartitionCount <= 0) {
             return 0;
         }
-        return Math.min(Math.max(0, plannedPartitionId), topicPartitionCount - 1);
+        if (plannedPartitionId < 0) {
+            return 0;
+        }
+        if (plannedPartitionId < routingPartitionCount) {
+            return plannedPartitionId;
+        }
+        return plannedPartitionId;
     }
 
     /** Logs the dynamic plan snapshot installed in {@link PartitionPlanHolder} at startup. */

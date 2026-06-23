@@ -67,6 +67,28 @@ dpp_plan_plugin_partitions() {
 print(','.join(str(x) for x in (p or {}).get('partitions') or []))" "${plugin_id}" 2>/dev/null || echo ""
 }
 
+dpp_allowed_users_for_repo() {
+  local repo="$1"
+  local short_name="$2"
+  if [[ "${repo}" == "dev_ozone" ]]; then
+    printf '%s' "om,ozone"
+  elif [[ "${repo}" == "dev_hdfs" ]]; then
+    printf '%s' "hdfs,nn"
+  else
+    printf '%s' "${short_name}"
+  fi
+}
+
+dpp_plan_service_has_users() {
+  local repo="$1"
+  local users_csv="$2"
+  local plan_json="$3"
+  printf '%s' "${plan_json}" | python3 -c \
+    'import sys,json; d=json.load(sys.stdin); repo=sys.argv[1]; want=set(u.strip() for u in sys.argv[2].split(",") if u.strip()); \
+entry=(d.get("services") or {}).get(repo) or {}; have=set(entry.get("allowedUsers") or []); sys.exit(0 if want.issubset(have) else 1)' \
+    "${repo}" "${users_csv}" 2>/dev/null
+}
+
 dpp_onboard_repo_multi() {
   local repo="$1"
   local plugin_id="$2"
@@ -104,16 +126,18 @@ dpp_ensure_plugin_onboarded() {
     return 1
   fi
 
+  users_csv="$(dpp_allowed_users_for_repo "${repo}" "${short_name}")"
+
   if dpp_plan_has_plugin "${plugin_id}" "${HTTP_BODY}"; then
-    pp_record_pass "${plugin_id} already in partition plan"
-    return 0
+    if dpp_plan_service_has_users "${repo}" "${users_csv}" "${HTTP_BODY}"; then
+      pp_record_pass "${plugin_id} already in partition plan (allowlist OK)"
+      return 0
+    fi
+    pp_record_fail "${plugin_id} in plan but allowlist missing [${users_csv}] — rerun with --fresh-plan"
+    return 1
   fi
 
   version="$(pp_json_field "${HTTP_BODY}" version)"
-  users_csv="${short_name}"
-  if [[ "${repo}" == "dev_ozone" ]]; then
-    users_csv="om,ozone"
-  fi
 
   echo "  Onboard ${repo} pluginId=${plugin_id} partitions=${part_count} allowedUsers=[${users_csv}]..."
   if ! dpp_onboard_repo_multi "${repo}" "${plugin_id}" "${part_count}" "${users_csv}" "${version}"; then
@@ -167,10 +191,44 @@ curl -s -o ${outfile} -w '%{http_code}' --negotiate -u : -X POST \
 dpp_kafka_find_partition_for_marker() {
   local record_key="$1"
   local marker="$2"
-  local max_messages="${3:-800}"
-  local out
+  local partitions_csv="${3:-}"
+  local max_messages="${4:-800}"
+  local out found partition_id end_offset start_offset
 
-  out="$(pp_kafka_run "timeout 25 /opt/kafka/bin/kafka-console-consumer.sh \
+  if [[ -n "${partitions_csv}" ]]; then
+    for partition_id in $(printf '%s' "${partitions_csv}" | tr ',' ' '); do
+      [[ -n "${partition_id}" ]] || continue
+      end_offset="$(pp_kafka_run "/opt/kafka/bin/kafka-get-offsets.sh \
+        --bootstrap-server ranger-kafka.rangernw:9092 --topic '${AUDIT_TOPIC}' --partitions ${partition_id} --time -1" \
+        | awk -F: '{print $NF}' | tail -1)"
+      [[ -n "${end_offset}" && "${end_offset}" =~ ^[0-9]+$ ]] || continue
+      [[ "${end_offset}" -gt 0 ]] || continue
+      start_offset=$((end_offset > 120 ? end_offset - 120 : 0))
+      out="$(pp_kafka_consumer_run "timeout 25 /opt/kafka/bin/kafka-console-consumer.sh \
+        --bootstrap-server ranger-kafka.rangernw:9092 \
+        --topic '${AUDIT_TOPIC}' \
+        --partition ${partition_id} \
+        --offset ${start_offset} \
+        --max-messages 120 \
+        --property print.key=true \
+        --timeout-ms 15000")"
+      found="$(printf '%s' "${out}" | python3 -c "
+import sys
+key, marker, pid = sys.argv[1:4]
+for line in sys.stdin:
+    if key in line and marker in line:
+        print(pid)
+        break
+" "${record_key}" "${marker}" "${partition_id}" 2>/dev/null || true)"
+      if [[ -n "${found}" ]]; then
+        echo "${found}"
+        return 0
+      fi
+    done
+    return 1
+  fi
+
+  out="$(pp_kafka_consumer_run "timeout 25 /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server ranger-kafka.rangernw:9092 \
     --topic '${AUDIT_TOPIC}' \
     --from-beginning \
@@ -179,13 +237,18 @@ dpp_kafka_find_partition_for_marker() {
     --property print.key=true \
     --timeout-ms 15000")"
 
-  printf '%s' "${out}" | python3 -c \
-    "import sys,re; key,marker=sys.argv[1],sys.argv[2]; \
-for line in sys.stdin: \
-  if key not in line or marker not in line: continue; \
-  m=re.search(r'Partition[:\\s]+(\\d+)', line, re.I); \
-  if m: print(m.group(1)); break" \
-    "${record_key}" "${marker}" 2>/dev/null || echo ""
+  printf '%s' "${out}" | python3 -c "
+import re
+import sys
+key, marker = sys.argv[1:3]
+for line in sys.stdin:
+    if key not in line or marker not in line:
+        continue
+    match = re.search(r'Partition[:\\s]+(\\d+)', line, re.I)
+    if match:
+        print(match.group(1))
+        break
+" "${record_key}" "${marker}" 2>/dev/null || true
 }
 
 dpp_verify_plugin_partition_routing() {
@@ -220,8 +283,12 @@ dpp_verify_plugin_partition_routing() {
   fi
   pp_record_pass "${plugin_id} POST /access HTTP ${DAEL_ACCESS_CODE}"
 
-  sleep 3
-  found="$(dpp_kafka_find_partition_for_marker "${plugin_id}" "${marker}")"
+  found=""
+  for _attempt in 1 2 3 4 5; do
+    sleep 4
+    found="$(dpp_kafka_find_partition_for_marker "${plugin_id}" "${marker}" "${assigned}")"
+    [[ -n "${found}" ]] && break
+  done
   if [[ -z "${found}" ]]; then
     pp_record_fail "${plugin_id} audit not found on Kafka (key=${plugin_id}, marker=${marker}) — check ACLs or dispatcher lag"
     return 1
@@ -255,4 +322,29 @@ dpp_optional_harness_triggers() {
   dpp_run_harness_plugin_smoke "${docker_dir}/scripts/kafka/trigger-kafka-plugin-audit-e2e.sh" "Kafka"
   dpp_run_harness_plugin_smoke "${docker_dir}/scripts/knox/trigger-knox-plugin-audit-e2e.sh" "Knox"
   dpp_run_harness_plugin_smoke "${docker_dir}/scripts/hbase/trigger-hbase-plugin-audit-e2e.sh" "HBase"
+}
+
+# Solr dispatcher Kerberos can break after ingestor/topic restarts; restart before HDFS pipeline smoke.
+dpp_ensure_solr_dispatcher_ready() {
+  local container="ranger-audit-dispatcher-solr"
+  local site="/opt/ranger/audit-dispatcher/conf/ranger-audit-dispatcher-solr-site.xml"
+  local keytab="/etc/keytabs/rangerauditserver.keytab"
+  local principal="rangerauditserver/ranger-audit-dispatcher-solr.rangernw@EXAMPLE.COM"
+
+  if ! docker ps --filter "name=^${container}$" --filter status=running -q | grep -q .; then
+    pp_record_fail "Solr dispatcher not running"
+    return 1
+  fi
+  if docker exec "${container}" test -f "${site}" 2>/dev/null; then
+    pp_patch_site_prop "${container}" "${site}" "xasecure.audit.jaas.Client.option.useTicketCache" "false" || true
+  fi
+  echo "  restarting ${container} (Solr Kerberos + consumer reset)..."
+  docker restart "${container}" >/dev/null
+  sleep 30
+  if docker exec "${container}" bash -c "kinit -kt '${keytab}' '${principal}'" >/dev/null 2>&1 \
+    && curl -sf "http://localhost:7091/api/health/ping" >/dev/null 2>&1; then
+    return 0
+  fi
+  pp_record_fail "Solr dispatcher not healthy after restart"
+  return 1
 }

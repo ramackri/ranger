@@ -24,6 +24,7 @@ import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanBootstrap;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanBootstrapConfig;
 import org.apache.ranger.audit.producer.kafka.partition.PartitionPlanHolder;
 import org.apache.ranger.audit.producer.kafka.partition.model.PartitionPlan;
+import org.apache.ranger.audit.producer.kafka.partition.model.PluginPartitionAssignment;
 import org.apache.ranger.audit.server.AuditServerConstants;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -93,6 +95,32 @@ public class AuditPartitionerDynamicTest {
 
         int partition = partitioner.partition(TOPIC, "trino", null, null, null, cluster(6));
         assertTrue(partition >= 3 && partition <= 5);
+    }
+
+    @Test
+    public void testDynamicModeUsesPlannedTailPartitionWhenClusterMetadataLagsAfterScale() {
+        PartitionPlan planV1 = PartitionPlanBootstrap.createInitialPlan(
+                PartitionPlanBootstrapConfig.create(TOPIC, new String[] {"hdfs"}, 3, 9));
+        PartitionPlanHolder.getInstance().install(planV1, 12);
+
+        AuditPartitioner partitioner = new AuditPartitioner();
+        partitioner.configure(dynamicProducerConfig());
+
+        // Simulate scale: plan now assigns tail partitions 12,13 but producer metadata still shows 12 partitions.
+        PartitionPlan planV2 = planV1.toBuilder()
+                .version(2)
+                .topicPartitionCount(14)
+                .plugins(Map.of("hdfs", PluginPartitionAssignment.of(0, 1, 2, 12, 13)))
+                .buffer(PluginPartitionAssignment.ofRange(3, 11))
+                .updatedBy("test")
+                .build();
+        PartitionPlanHolder.getInstance().install(planV2, 14);
+
+        // Round-robin index 3 -> planned partition 12; must not clamp to 11 when cluster still reports 12 partitions.
+        for (int i = 0; i < 3; i++) {
+            partitioner.partition(TOPIC, "hdfs", null, null, null, cluster(12));
+        }
+        assertEquals(12, partitioner.partition(TOPIC, "hdfs", null, null, null, cluster(12)));
     }
 
     @Test
