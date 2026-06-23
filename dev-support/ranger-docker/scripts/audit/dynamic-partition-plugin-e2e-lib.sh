@@ -26,7 +26,7 @@ readonly -a DPP_PLUGIN_ONBOARD_SPECS=(
   "dev_kafka|kafka|kafka|2|ranger-kafka|/etc/keytabs/kafka.keytab|kafka/ranger-kafka.rangernw@EXAMPLE.COM"
   "dev_knox|knox|knox|2|ranger-knox|/etc/keytabs/knox.keytab|knox/ranger-knox.rangernw@EXAMPLE.COM"
   "dev_kms|kms|rangerkms|2|ranger-kms|/etc/keytabs/rangerkms.keytab|rangerkms/ranger-kms.rangernw@EXAMPLE.COM"
-  "dev_ozone|ozone|om|2|ozone-om|/etc/keytabs/om.keytab|om/om.rangernw@EXAMPLE.COM"
+  "dev_ozone|ozone|om|2|ozone-om|/etc/keytabs/om.keytab|om/ranger-ozone.rangernw@EXAMPLE.COM"
 )
 
 dpp_filter_specs() {

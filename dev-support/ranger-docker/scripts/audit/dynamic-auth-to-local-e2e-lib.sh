@@ -37,7 +37,7 @@ readonly -a DAEL_PLUGIN_PROFILES=(
   "dev_kms|kms|rangerkms|ranger-kms|/etc/keytabs/rangerkms.keytab|rangerkms/ranger-kms.rangernw@EXAMPLE.COM"
   "dev_trino|trino|trino|ranger-trino|/etc/keytabs/trino.keytab|trino/ranger-trino.rangernw@EXAMPLE.COM"
   "dev_solr|solr|solr|ranger-solr|/etc/keytabs/solr.keytab|solr/ranger-solr.rangernw@EXAMPLE.COM"
-  "dev_ozone|ozone|om|ozone-om|/etc/keytabs/om.keytab|om/om.rangernw@EXAMPLE.COM"
+  "dev_ozone|ozone|om|ozone-om|/etc/keytabs/om.keytab|om/ranger-ozone.rangernw@EXAMPLE.COM"
 )
 
 dael_ingestor_access_url() {
